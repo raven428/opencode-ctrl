@@ -1,0 +1,47 @@
+diff --git a/packages/opencode/src/cli/cmd/tui/app.tsx b/packages/opencode/src/cli/cmd/tui/app.tsx
+index 97c910a47..8e24290d8 100644
+--- a/packages/opencode/src/cli/cmd/tui/app.tsx
++++ b/packages/opencode/src/cli/cmd/tui/app.tsx
+@@ -1,4 +1,4 @@
+-import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
++import { render, useKeyboard, useRenderer, useTerminalDimensions, useSelectionHandler } from "@opentui/solid"
+ import { Clipboard } from "@tui/util/clipboard"
+ import { Selection } from "@tui/util/selection"
+ import { MouseButton, TextAttributes } from "@opentui/core"
+@@ -255,6 +255,36 @@ function App() {
+ 
+     renderer.clearSelection()
+   }
++
++  /*
++    // Auto-copy selection to clipboard when mouse selection completes
++    let lastCopiedText = ""
++    useSelectionHandler((selection) => {
++      if (Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) {
++        renderer.clearSelection()
++        return
++      }
++
++      // Copy when selection is active but not being dragged (drag completed)
++      if (!selection.isDragging && selection.isActive) {
++        const text = selection.getSelectedText()
++
++        // Avoid copying the same text multiple times
++        if (text && text.length > 0 && text !== lastCopiedText) {
++          lastCopiedText = text
++
++          // Delay copy to allow tmux to exit mouse selection state and process OSC52
++          setTimeout(() => {
++            Clipboard.copy(text)
++              .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
++              .catch(toast.error)
++            renderer.clearSelection()
++          }, 100)
++        }
++      }
++    })
++  */
++
+   const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
+ 
+   createEffect(() => {
