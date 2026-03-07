@@ -1,0 +1,94 @@
+---
+name: build
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "*"
+  pull_request:
+env:
+  REPO: /tmp/opencode
+  DIST: /tmp/opencode-dist
+  CACHE_PATH: |
+    ~/.cargo
+    ~/.rustup
+    /tmp/opencode/packages/desktop
+  OPENCODE_VERSION: v1.2.16
+jobs:
+  cache-cargo-bun:
+    name: warm dependencies cache
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: cache cargo and bun
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_PATH }}
+          key: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
+          restore-keys: "setup-${{ hashFiles('scripts/build-cli.sh',
+            'scripts/build-desktop.sh') }}"
+      - name: prepare and build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          bash scripts/prepare.sh
+          bash scripts/cache-cargo-bun.sh
+  build:
+    name: build ${{ matrix.target }} artifacts
+    runs-on: ubuntu-24.04
+    needs: cache-cargo-bun
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    env:
+      TARGET_OS: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: clone and patch
+        run: |
+          git clone --depth 1 --branch "${OPENCODE_VERSION}" \
+            https://github.com/anomalyco/opencode.git "${REPO}"
+          bash scripts/patch.sh "$REPO" patches/common patches/$TARGET_OS
+      - name: restore cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATH }}
+          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
+            }}-${{ matrix.target }}"
+          restore-keys: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
+      - name: prepare and build
+        run: |
+          bash scripts/prepare.sh
+          bash scripts/build-cli.sh "$REPO" "$DIST"
+          bash scripts/build-desktop.sh "$REPO" "$DIST" "$DIST"
+      - name: save cache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE_PATH }}
+          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
+            }}-${{ matrix.target }}"
+      - name: upload release artifacts
+        uses: ncipollo/release-action@v1
+        with:
+          name: >-
+            ${{ github.ref_type == 'tag'
+              && format('opencode {0}', github.ref_name)
+              || format('branch [{0}] binaries', github.head_ref == '' && github.ref_name || github.head_ref) }}
+          draft: ${{ github.ref_type != 'tag' }}
+          allowUpdates: true
+          tag: ${{ github.ref_type == 'tag' && github.ref_name || 'v999' }}
+          artifacts: "${{ env.DIST }}/*"
+          body: >-
+            ${{ github.ref_type == 'tag'
+              && format('opencode build {0}', github.ref_name)
+              || format('branch [{0}] opencode build from recent commit', github.head_ref == '' && github.ref_name || github.head_ref) }}

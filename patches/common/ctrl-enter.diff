@@ -1,0 +1,31 @@
+diff --git a/packages/app/src/components/prompt-input.tsx b/packages/app/src/components/prompt-input.tsx
+index c9c8bc6b4..8b20daab2 100644
+--- a/packages/app/src/components/prompt-input.tsx
++++ b/packages/app/src/components/prompt-input.tsx
+@@ -1061,10 +1061,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
+       }
+     }
+ 
+-    // Handle Shift+Enter BEFORE IME check - Shift+Enter is never used for IME input
+-    // and should always insert a newline regardless of composition state
+-    if (event.key === "Enter" && event.shiftKey) {
+-      addPart({ type: "text", content: "\n", start: 0, end: 0 })
++    // Handle Shift+Enter / Alt+Enter / plain Enter BEFORE IME check - insert newline
++    if (event.key === "Enter" && (event.shiftKey || event.altKey || (!event.ctrlKey && !event.metaKey))) {
++      if (!isImeComposing(event)) {
++        addPart({ type: "text", content: "\n", start: 0, end: 0 })
++      }
+       event.preventDefault()
+       return
+     }
+@@ -1128,8 +1129,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
+       return
+     }
+ 
+-    // Note: Shift+Enter is handled earlier, before IME check
+-    if (event.key === "Enter" && !event.shiftKey) {
++    // Ctrl+Enter or Cmd+Enter submits
++    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+       handleSubmit(event)
+     }
+   }
