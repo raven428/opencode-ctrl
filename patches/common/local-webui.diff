@@ -19,7 +19,7 @@ index 34e80d71a..532105a50 100755
 @@ -15,6 +15,49 @@ process.chdir(dir)
  import { Script } from "@opencode-ai/script"
  import pkg from "../package.json"
- 
+
 +// Build web app and embed dist into app-dist.ts
 +const appDir = path.resolve(dir, "../../packages/app")
 +console.log("Building web app...")
@@ -75,7 +75,7 @@ index 22eba6320..4c44194ca 100644
    export const OPENCODE_MODELS_URL = process.env["OPENCODE_MODELS_URL"]
    export const OPENCODE_MODELS_PATH = process.env["OPENCODE_MODELS_PATH"]
 +  export const OPENCODE_APP_URL = process.env["OPENCODE_APP_URL"]
- 
+
    function number(key: string) {
      const value = process.env[key]
 diff --git a/packages/opencode/src/server/server.ts b/packages/opencode/src/server/server.ts
@@ -97,7 +97,7 @@ index 6ea66be98..be85076d5 100644
 +          const reqPath = c.req.path
 +          const csp =
 +            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:"
- 
+
 -          const response = await proxy(`https://app.opencode.ai${path}`, {
 +          if (Flag.OPENCODE_APP_URL) {
 +            const appHost = new URL(Flag.OPENCODE_APP_URL).host
