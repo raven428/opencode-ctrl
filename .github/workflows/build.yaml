@@ -7,6 +7,8 @@ on:
     tags:
       - "*"
   pull_request:
+  schedule:
+    - cron: "11 11 * * 1"
 env:
   REPO: /tmp/opencode
   DIST: /tmp/opencode-dist
