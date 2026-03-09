@@ -1,26 +1,25 @@
 diff --git a/packages/app/package.json b/packages/app/package.json
-index abef97e81..3d12b35b7 100644
+index 6f5fdeb2f..a5386c0a2 100644
 --- a/packages/app/package.json
 +++ b/packages/app/package.json
-@@ -5,7 +5,8 @@
-   "type": "module",
+@@ -6,7 +6,8 @@
    "exports": {
      ".": "./src/index.ts",
--    "./vite": "./vite.js"
-+    "./vite": "./vite.js",
+     "./vite": "./vite.js",
+-    "./index.css": "./src/index.css"
++    "./index.css": "./src/index.css",
 +    "./package.json": "./package.json"
    },
    "scripts": {
      "typecheck": "tsgo -b",
 diff --git a/packages/opencode/script/build.ts b/packages/opencode/script/build.ts
-index f0b3fa828..a2a839e0b 100755
+index 34e80d71a..5bdf572d7 100755
 --- a/packages/opencode/script/build.ts
 +++ b/packages/opencode/script/build.ts
-@@ -14,6 +14,92 @@ process.chdir(dir)
- 
- import pkg from "../package.json"
+@@ -15,6 +15,91 @@ process.chdir(dir)
  import { Script } from "@opencode-ai/script"
-+
+ import pkg from "../package.json"
+ 
 +// Build web app and embed dist into app-dist.ts
 +const appDir = path.resolve(
 +  dir, "../../packages/app",
@@ -110,29 +109,19 @@ index f0b3fa828..a2a839e0b 100755
  // Fetch and generate models.dev snapshot
  const modelsData = process.env.MODELS_DEV_API_JSON
 diff --git a/packages/opencode/src/flag/flag.ts b/packages/opencode/src/flag/flag.ts
-index b11058b34..e61872482 100644
+index 22eba6320..4c44194ca 100644
 --- a/packages/opencode/src/flag/flag.ts
 +++ b/packages/opencode/src/flag/flag.ts
-@@ -50,6 +50,7 @@ export namespace Flag {
-   export const OPENCODE_EXPERIMENTAL_MARKDOWN = truthy("OPENCODE_EXPERIMENTAL_MARKDOWN")
+@@ -60,6 +60,7 @@ export namespace Flag {
+   export const OPENCODE_EXPERIMENTAL_MARKDOWN = !falsy("OPENCODE_EXPERIMENTAL_MARKDOWN")
    export const OPENCODE_MODELS_URL = process.env["OPENCODE_MODELS_URL"]
    export const OPENCODE_MODELS_PATH = process.env["OPENCODE_MODELS_PATH"]
 +  export const OPENCODE_APP_URL = process.env["OPENCODE_APP_URL"]
  
    function number(key: string) {
      const value = process.env[key]
-diff --git a/packages/opencode/src/server/app-dist.ts b/packages/opencode/src/server/app-dist.ts
-new file mode 100644
-index 000000000..7c3ee204f
---- /dev/null
-+++ b/packages/opencode/src/server/app-dist.ts
-@@ -0,0 +1,4 @@
-+// Auto-generated – do not edit
-+// Maps path -> [bunfs path, mime]
-+export const files: Record<string, [string, string]> = {
-+}
 diff --git a/packages/opencode/src/server/server.ts b/packages/opencode/src/server/server.ts
-index 015553802..7c2aeba62 100644
+index 85049650c..f134afffd 100644
 --- a/packages/opencode/src/server/server.ts
 +++ b/packages/opencode/src/server/server.ts
 @@ -1,5 +1,6 @@
@@ -142,7 +131,7 @@ index 015553802..7c2aeba62 100644
  import { Log } from "../util/log"
  import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler } from "hono-openapi"
  import { Hono } from "hono"
-@@ -531,19 +532,40 @@ export namespace Server {
+@@ -557,19 +558,40 @@ export namespace Server {
            },
          )
          .all("/*", async (c) => {

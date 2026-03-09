@@ -1,8 +1,8 @@
 diff --git a/packages/app/src/components/prompt-input.tsx b/packages/app/src/components/prompt-input.tsx
-index 9186dcfa3..c0fc41ef2 100644
+index c9c8bc6b4..8b20daab2 100644
 --- a/packages/app/src/components/prompt-input.tsx
 +++ b/packages/app/src/components/prompt-input.tsx
-@@ -1031,10 +1031,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
+@@ -1061,10 +1061,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
        }
      }
  
@@ -18,7 +18,7 @@ index 9186dcfa3..c0fc41ef2 100644
        event.preventDefault()
        return
      }
-@@ -1114,8 +1115,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
+@@ -1128,8 +1129,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
        return
      }
  
@@ -28,4 +28,4 @@ index 9186dcfa3..c0fc41ef2 100644
 +    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
        handleSubmit(event)
      }
-     if (event.key === "Escape") {
+   }
