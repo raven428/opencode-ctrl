@@ -63,10 +63,11 @@ jobs:
           bash scripts/patch.sh "$REPO" patches/common patches/$TARGET_OS
       - name: restore cache
         uses: actions/cache/restore@v4
+        id: restore-cache
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
           restore-keys: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
       - name: prepare and build
         run: |
@@ -75,10 +76,11 @@ jobs:
           bash scripts/build-desktop.sh "$REPO" "$DIST" "$DIST"
       - name: save cache
         uses: actions/cache/save@v4
+        if: always() && steps.restore-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
       - name: upload release artifacts
         uses: ncipollo/release-action@v1
         with:
@@ -94,3 +96,19 @@ jobs:
             ${{ github.ref_type == 'tag'
               && format('opencode build {0}', github.ref_name)
               || format('branch [{0}] opencode build from recent commit', github.head_ref == '' && github.ref_name || github.head_ref) }}
+  all-green:
+    name: all green
+    timeout-minutes: 3
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    if: always()
+    permissions:
+      checks: read
+    steps:
+      - name: waiting for checks success
+        uses: poseidon/wait-for-status-checks@v0.6.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: all green, foobar
+          timeout: 111s
