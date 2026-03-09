@@ -63,10 +63,11 @@ jobs:
           bash scripts/patch.sh "$REPO" patches/common patches/$TARGET_OS
       - name: restore cache
         uses: actions/cache/restore@v4
+        id: restore-cache
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
           restore-keys: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
       - name: prepare and build
         run: |
@@ -75,10 +76,11 @@ jobs:
           bash scripts/build-desktop.sh "$REPO" "$DIST" "$DIST"
       - name: save cache
         uses: actions/cache/save@v4
+        if: always() && steps.restore-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
       - name: upload release artifacts
         uses: ncipollo/release-action@v1
         with:
