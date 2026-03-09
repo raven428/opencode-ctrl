@@ -96,3 +96,19 @@ jobs:
             ${{ github.ref_type == 'tag'
               && format('opencode build {0}', github.ref_name)
               || format('branch [{0}] opencode build from recent commit', github.head_ref == '' && github.ref_name || github.head_ref) }}
+  all-green:
+    name: all green
+    timeout-minutes: 3
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    if: always()
+    permissions:
+      checks: read
+    steps:
+      - name: waiting for checks success
+        uses: poseidon/wait-for-status-checks@v0.6.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: all green, foobar
+          timeout: 111s
