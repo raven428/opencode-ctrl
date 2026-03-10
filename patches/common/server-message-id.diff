@@ -1,0 +1,17 @@
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 4f77920cc..072ae2544 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -566,7 +566,11 @@ export namespace SessionPrompt {
+ 
+       const processor = SessionProcessor.create({
+         assistantMessage: (await Session.updateMessage({
+-          id: Identifier.ascending("message"),
++          id: Identifier.create(
++            "message",
++            false,
++            Math.max(Date.now(), Identifier.timestamp(lastUser.id) + 1),
++          ),
+           parentID: lastUser.id,
+           role: "assistant",
+           mode: agent.name,
