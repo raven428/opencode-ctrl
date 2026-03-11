@@ -1,3 +1,165 @@
+diff --git a/packages/app/src/context/global-sync/event-reducer.ts b/packages/app/src/context/global-sync/event-reducer.ts
+index 241dfb14d..33a832df6 100644
+--- a/packages/app/src/context/global-sync/event-reducer.ts
++++ b/packages/app/src/context/global-sync/event-reducer.ts
+@@ -14,6 +14,20 @@ import type {
+ import type { State, VcsCache } from "./types"
+ import { trimSessions } from "./session-trim"
+ 
++function insertMessage(messages: Message[], msg: Message): void {
++  let lo = 0
++  let hi = messages.length
++  while (lo < hi) {
++    const mid = (lo + hi) >>> 1
++    const m = messages[mid]
++    const diff = m.time.created - msg.time.created
++    const cmp = diff !== 0 ? diff : m.id < msg.id ? -1 : m.id > msg.id ? 1 : 0
++    if (cmp <= 0) lo = mid + 1
++    else hi = mid
++  }
++  messages.splice(lo, 0, msg)
++}
++
+ export function applyGlobalEvent(input: {
+   event: { type: string; properties?: unknown }
+   project: Project[]
+@@ -171,16 +185,16 @@ export function applyDirectoryEvent(input: {
+         input.setStore("message", info.sessionID, [info])
+         break
+       }
+-      const result = Binary.search(messages, info.id, (m) => m.id)
+-      if (result.found) {
+-        input.setStore("message", info.sessionID, result.index, reconcile(info))
++      const idx = messages.findIndex((m) => m.id === info.id)
++      if (idx !== -1) {
++        input.setStore("message", info.sessionID, idx, reconcile(info))
+         break
+       }
+       input.setStore(
+         "message",
+         info.sessionID,
+         produce((draft) => {
+-          draft.splice(result.index, 0, info)
++          insertMessage(draft, info)
+         }),
+       )
+       break
+@@ -191,8 +205,8 @@ export function applyDirectoryEvent(input: {
+         produce((draft) => {
+           const messages = draft.message[props.sessionID]
+           if (messages) {
+-            const result = Binary.search(messages, props.messageID, (m) => m.id)
+-            if (result.found) messages.splice(result.index, 1)
++            const idx = messages.findIndex((m) => m.id === props.messageID)
++            if (idx !== -1) messages.splice(idx, 1)
+           }
+           delete draft.part[props.messageID]
+         }),
+diff --git a/packages/app/src/context/sync.tsx b/packages/app/src/context/sync.tsx
+index ed54751c3..afad0343a 100644
+--- a/packages/app/src/context/sync.tsx
++++ b/packages/app/src/context/sync.tsx
+@@ -11,6 +11,23 @@ function sortParts(parts: Part[]) {
+   return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
+ }
+ 
++function cmpMessages(a: Message, b: Message) {
++  const diff = a.time.created - b.time.created
++  if (diff !== 0) return diff
++  return cmp(a.id, b.id)
++}
++
++function insertMessage(messages: Message[], msg: Message): void {
++  let lo = 0
++  let hi = messages.length
++  while (lo < hi) {
++    const mid = (lo + hi) >>> 1
++    if (cmpMessages(messages[mid], msg) <= 0) lo = mid + 1
++    else hi = mid
++  }
++  messages.splice(lo, 0, msg)
++}
++
+ function runInflight(map: Map<string, Promise<void>>, key: string, task: () => Promise<void>) {
+   const pending = map.get(key)
+   if (pending) return pending
+@@ -44,8 +61,7 @@ type OptimisticRemoveInput = {
+ export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddInput) {
+   const messages = draft.message[input.sessionID]
+   if (messages) {
+-    const result = Binary.search(messages, input.message.id, (m) => m.id)
+-    messages.splice(result.index, 0, input.message)
++    insertMessage(messages, input.message)
+   } else {
+     draft.message[input.sessionID] = [input.message]
+   }
+@@ -55,8 +71,8 @@ export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddI
+ export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticRemoveInput) {
+   const messages = draft.message[input.sessionID]
+   if (messages) {
+-    const result = Binary.search(messages, input.messageID, (m) => m.id)
+-    if (result.found) messages.splice(result.index, 1)
++    const idx = messages.findIndex((m) => m.id === input.messageID)
++    if (idx !== -1) messages.splice(idx, 1)
+   }
+   delete draft.part[input.messageID]
+ }
+@@ -64,9 +80,8 @@ export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticR
+ function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: OptimisticAddInput) {
+   setStore("message", input.sessionID, (messages: Message[] | undefined) => {
+     if (!messages) return [input.message]
+-    const result = Binary.search(messages, input.message.id, (m) => m.id)
+     const next = [...messages]
+-    next.splice(result.index, 0, input.message)
++    insertMessage(next, input.message)
+     return next
+   })
+   setStore("part", input.message.id, sortParts(input.parts))
+@@ -75,10 +90,10 @@ function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: Optimis
+ function setOptimisticRemove(setStore: (...args: unknown[]) => void, input: OptimisticRemoveInput) {
+   setStore("message", input.sessionID, (messages: Message[] | undefined) => {
+     if (!messages) return messages
+-    const result = Binary.search(messages, input.messageID, (m) => m.id)
+-    if (!result.found) return messages
++    const idx = messages.findIndex((m) => m.id === input.messageID)
++    if (idx === -1) return messages
+     const next = [...messages]
+-    next.splice(result.index, 1)
++    next.splice(idx, 1)
+     return next
+   })
+   setStore("part", (part: Record<string, Part[] | undefined>) => {
+@@ -126,7 +141,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
+         input.client.session.messages({ sessionID: input.sessionID, limit: input.limit }),
+       )
+       const items = (messages.data ?? []).filter((x) => !!x?.info?.id)
+-      const session = items.map((x) => x.info).sort((a, b) => cmp(a.id, b.id))
++      const session = items.map((x) => x.info).sort(cmpMessages)
+       const part = items.map((message) => ({ id: message.info.id, part: sortParts(message.parts) }))
+       return {
+         session,
+diff --git a/packages/app/src/pages/session/message-timeline.tsx b/packages/app/src/pages/session/message-timeline.tsx
+index a7f503d5a..3765e91d4 100644
+--- a/packages/app/src/pages/session/message-timeline.tsx
++++ b/packages/app/src/pages/session/message-timeline.tsx
+@@ -12,7 +12,6 @@ import { SessionTurn } from "@opencode-ai/ui/session-turn"
+ import { ScrollView } from "@opencode-ai/ui/scroll-view"
+ import type { AssistantMessage, Message as MessageType, Part, TextPart, UserMessage } from "@opencode-ai/sdk/v2"
+ import { showToast } from "@opencode-ai/ui/toast"
+-import { Binary } from "@opencode-ai/util/binary"
+ import { getFilename } from "@opencode-ai/util/path"
+ import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
+ import { SessionContextUsage } from "@/components/session-context-usage"
+@@ -239,8 +238,7 @@ export function MessageTimeline(props: {
+     const parentID = pending()?.parentID
+     if (parentID) {
+       const messages = sessionMessages()
+-      const result = Binary.search(messages, parentID, (message) => message.id)
+-      const message = result.found ? messages[result.index] : messages.find((item) => item.id === parentID)
++      const message = messages.find((item) => item.id === parentID)
+       if (message && message.role === "user") return message.id
+     }
+ 
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
 index 4f77920cc..072ae2544 100644
 --- a/packages/opencode/src/session/prompt.ts
