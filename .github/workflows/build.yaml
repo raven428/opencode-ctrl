@@ -22,7 +22,7 @@ jobs:
     name: warm dependencies cache
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -52,7 +52,7 @@ jobs:
     env:
       TARGET_OS: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -67,7 +67,7 @@ jobs:
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}01"
           restore-keys: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
       - name: prepare and build
         run: |
@@ -76,11 +76,11 @@ jobs:
           bash scripts/build-desktop.sh "$REPO" "$DIST" "$DIST"
       - name: save cache
         uses: actions/cache/save@v4
-        if: always() && steps.restore-cache.outputs.cache-hit != 'true'
+        if: steps.restore-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CACHE_PATH }}
           key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
+            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}01"
       - name: upload release artifacts
         uses: ncipollo/release-action@v1
         with:
