@@ -24,6 +24,7 @@ diff --git a/packages/opencode/src/server/routes/session.ts b/packages/opencode/
          }),
 diff --git a/packages/app/src/components/settings-archive.tsx b/packages/app/src/components/settings-archive.tsx
 new file mode 100644
+index 000000000..ab9ea0a82
 --- /dev/null
 +++ b/packages/app/src/components/settings-archive.tsx
 @@ -0,0 +1,188 @@
@@ -44,10 +45,7 @@ new file mode 100644
 +
 +type FilterScope = "all" | "current"
 +
-+type ScopeOption = {
-+  value: FilterScope
-+  label: "settings.archive.scope.all" | "settings.archive.scope.current"
-+}
++type ScopeOption = { value: FilterScope; label: "settings.archive.scope.all" | "settings.archive.scope.current" }
 +
 +const scopeOptions: ScopeOption[] = [
 +  { value: "all", label: "settings.archive.scope.all" },
@@ -75,11 +73,7 @@ new file mode 100644
 +  const currentProject = createMemo(() => {
 +    const dir = currentDirectory()
 +    if (!dir) return null
-+    return (
-+      layoutProjects().find(
-+        (p) => p.worktree === dir || p.sandboxes?.includes(dir),
-+      ) ?? null
-+    )
++    return layoutProjects().find((p) => p.worktree === dir || p.sandboxes?.includes(dir)) ?? null
 +  })
 +
 +  const filteredProjects = createMemo(() => {
@@ -115,19 +109,14 @@ new file mode 100644
 +      for (const project of projects) {
 +        const directories = [project.worktree, ...(project.sandboxes ?? [])]
 +        for (const directory of directories) {
-+          const result = await globalSDK.client.experimental.session.list({
-+            directory,
-+            archived: true,
-+          })
-+          const sessions = result.data ?? []
++          const result = await globalSDK.client.experimental.session.list({ directory, archived: true })
++          const sessions = (result.data ?? []).filter((s) => s.time?.archived != null)
 +          for (const session of sessions) {
 +            allSessions.push(session)
 +          }
 +        }
 +      }
-+      return allSessions.sort(
-+        (a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0),
-+      )
++      return allSessions.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
 +    },
 +    { initialValue: [] },
 +  )
@@ -138,8 +127,7 @@ new file mode 100644
 +    return sessions.filter((s) => !removed.has(s.id))
 +  }
 +
-+  const currentScopeOption = () =>
-+    scopeOptions.find((o) => o.value === filterScope())
++  const currentScopeOption = () => scopeOptions.find((o) => o.value === filterScope())
 +
 +  const unarchiveSession = async (session: Session) => {
 +    setRemovedIds((prev) => new Set(prev).add(session.id))
@@ -160,12 +148,8 @@ new file mode 100644
 +    <div class="flex flex-col h-full overflow-y-auto no-scrollbar px-4 pb-10 sm:px-10 sm:pb-10">
 +      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
 +        <div class="flex flex-col gap-1 pt-6 pb-8 max-w-[720px]">
-+          <h2 class="text-16-medium text-text-strong">
-+            {language.t("settings.archive.title")}
-+          </h2>
-+          <p class="text-14-regular text-text-weak">
-+            {language.t("settings.archive.description")}
-+          </p>
++          <h2 class="text-16-medium text-text-strong">{language.t("settings.archive.title")}</h2>
++          <p class="text-14-regular text-text-weak">{language.t("settings.archive.description")}</p>
 +        </div>
 +      </div>
 +
@@ -192,9 +176,7 @@ new file mode 100644
 +            when={displayedSessions().length}
 +            fallback={
 +              <div class="min-h-[700px]">
-+                <div class="text-14-regular text-text-weak">
-+                  {language.t("settings.archive.none")}
-+                </div>
++                <div class="text-14-regular text-text-weak">{language.t("settings.archive.none")}</div>
 +              </div>
 +            }
 +          >
@@ -204,22 +186,15 @@ new file mode 100644
 +                  <div class="flex items-center justify-between gap-4 px-3 py-1 rounded-md hover:bg-surface-raised-base-hover">
 +                    <div class="flex items-center gap-x-3 grow min-w-0">
 +                      <div class="flex items-center gap-2 min-w-0">
-+                        <span class="text-14-regular text-text-strong truncate">
-+                          {session.title}
-+                        </span>
-+                        <span class="text-14-regular text-text-weak truncate">
-+                          {getSessionLabel(session)}
-+                        </span>
++                        <span class="text-14-regular text-text-strong truncate">{session.title}</span>
++                        <span class="text-14-regular text-text-weak truncate">{getSessionLabel(session)}</span>
 +                      </div>
 +                    </div>
 +                    <div class="flex items-center gap-4 shrink-0">
 +                      <Show when={session.time?.updated}>
 +                        {(updated) => (
 +                          <span class="text-12-regular text-text-weak whitespace-nowrap">
-+                            {getRelativeTime(
-+                              new Date(updated()).toISOString(),
-+                              language.t,
-+                            )}
++                            {getRelativeTime(new Date(updated()).toISOString(), language.t)}
 +                          </span>
 +                        )}
 +                      </Show>
