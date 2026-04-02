@@ -1,0 +1,565 @@
+diff --git a/packages/sdk/js/src/v2/gen/sdk.gen.ts b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+--- a/packages/sdk/js/src/v2/gen/sdk.gen.ts
++++ b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+@@ -1400,7 +1400,7 @@ export class Session2 extends HeyApiClient {
+       workspace?: string
+       title?: string
+       time?: {
+-        archived?: number
++        archived?: number | null
+       }
+     },
+     options?: Options<never, ThrowOnError>,
+diff --git a/packages/sdk/js/src/v2/gen/types.gen.ts b/packages/sdk/js/src/v2/gen/types.gen.ts
+--- a/packages/sdk/js/src/v2/gen/types.gen.ts
++++ b/packages/sdk/js/src/v2/gen/types.gen.ts
+@@ -2877,7 +2877,7 @@ export type SessionUpdateData = {
+   body?: {
+     title?: string
+     time?: {
+-      archived?: number
++      archived?: number | null
+     }
+   }
+   path: {
+diff --git a/packages/opencode/src/session/index.ts b/packages/opencode/src/session/index.ts
+--- a/packages/opencode/src/session/index.ts
++++ b/packages/opencode/src/session/index.ts
+@@ -395,7 +395,7 @@ export namespace Session {
+   export const setArchived = fn(
+     z.object({
+       sessionID: Identifier.schema("session"),
+-      time: z.number().optional(),
++      time: z.number().nullable().optional(),
+     }),
+     async (input) => {
+       return Database.use((db) => {
+diff --git a/packages/opencode/src/server/routes/session.ts b/packages/opencode/src/server/routes/session.ts
+--- a/packages/opencode/src/server/routes/session.ts
++++ b/packages/opencode/src/server/routes/session.ts
+@@ -269,7 +269,7 @@ export const sessionRouter = new Hono()
+           title: z.string().optional(),
+           time: z
+             .object({
+-              archived: z.number().optional(),
++              archived: z.number().nullable().optional(),
+             })
+             .optional(),
+         }),
+diff --git a/packages/app/src/components/settings-archive.tsx b/packages/app/src/components/settings-archive.tsx
+new file mode 100644
+index 000000000..ab9ea0a82
+--- /dev/null
++++ b/packages/app/src/components/settings-archive.tsx
+@@ -0,0 +1,203 @@
++import { Button } from "@opencode-ai/ui/button"
++import { Icon } from "@opencode-ai/ui/icon"
++import { RadioGroup } from "@opencode-ai/ui/radio-group"
++import { showToast } from "@opencode-ai/ui/toast"
++import { getFilename } from "@opencode-ai/util/path"
++import { Component, For, Show, createMemo, createResource, createSignal } from "solid-js"
++import { useParams } from "@solidjs/router"
++import { useGlobalSDK } from "@/context/global-sdk"
++import { useGlobalSync } from "@/context/global-sync"
++import { useLanguage } from "@/context/language"
++import { useLayout } from "@/context/layout"
++import { getRelativeTime } from "@/utils/time"
++import { decode64 } from "@/utils/base64"
++import type { Session } from "@opencode-ai/sdk/v2/client"
++import { SessionSkeleton } from "@/pages/layout/sidebar-items"
++
++type FilterScope = "all" | "current"
++
++type ScopeOption = { value: FilterScope; label: "settings.archive.scope.all" | "settings.archive.scope.current" }
++
++const scopeOptions: ScopeOption[] = [
++  { value: "all", label: "settings.archive.scope.all" },
++  { value: "current", label: "settings.archive.scope.current" },
++]
++
++export const SettingsArchive: Component = () => {
++  const language = useLanguage()
++  const globalSDK = useGlobalSDK()
++  const globalSync = useGlobalSync()
++  const layout = useLayout()
++  const params = useParams()
++  const [removedIds, setRemovedIds] = createSignal<Set<string>>(new Set())
++
++  const projects = createMemo(() => globalSync.data.project)
++  const layoutProjects = createMemo(() => layout.projects.list())
++  const hasMultipleProjects = createMemo(() => projects().length > 1)
++  const homedir = createMemo(() => globalSync.data.path.home)
++
++  const defaultScope = () => (hasMultipleProjects() ? "current" : "all")
++  const [filterScope, setFilterScope] = createSignal<FilterScope>(defaultScope())
++
++  const currentDirectory = createMemo(() => decode64(params.dir) ?? "")
++
++  const currentProject = createMemo(() => {
++    const dir = currentDirectory()
++    if (!dir) return null
++    return layoutProjects().find((p) => p.worktree === dir || p.sandboxes?.includes(dir)) ?? null
++  })
++
++  const filteredProjects = createMemo(() => {
++    if (filterScope() === "current" && currentProject()) {
++      return [currentProject()!]
++    }
++    return layoutProjects()
++  })
++
++  const getSessionLabel = (session: Session) => {
++    const directory = session.directory
++    const home = homedir()
++    const path = home ? directory.replace(home, "~") : directory
++
++    if (filterScope() === "current" && currentProject()) {
++      const current = currentProject()
++      const kind =
++        current && directory === current.worktree
++          ? language.t("workspace.type.local")
++          : language.t("workspace.type.sandbox")
++      const [store] = globalSync.child(directory, { bootstrap: false })
++      const name = store.vcs?.branch ?? getFilename(directory)
++      return `${kind} : ${name || path}`
++    }
++
++    return path
++  }
++
++  const [archivedSessions] = createResource(
++    () => ({ scope: filterScope(), projects: filteredProjects() }),
++    async ({ projects }) => {
++      const directories = projects.flatMap((project) => [
++        project.worktree,
++        ...(project.sandboxes ?? []),
++      ])
++      const results = await Promise.all(
++        directories.map((directory) =>
++          globalSDK.client.experimental.session.list({ directory, archived: true }),
++        ),
++      )
++      const allSessions = results
++        .flatMap((result) => result.data ?? [])
++        .filter((s) => s.time?.archived != null)
++      return allSessions.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
++    },
++    { initialValue: [] },
++  )
++
++  const displayedSessions = () => {
++    const sessions = archivedSessions() ?? []
++    const removed = removedIds()
++    return sessions.filter((s) => !removed.has(s.id))
++  }
++
++  const currentScopeOption = () => scopeOptions.find((o) => o.value === filterScope())
++
++  const unarchiveSession = async (session: Session) => {
++    setRemovedIds((prev) => new Set(prev).add(session.id))
++    try {
++      await globalSDK.client.session.update({
++        directory: session.directory,
++        sessionID: session.id,
++        time: { archived: null },
++      })
++    } catch (err) {
++      setRemovedIds((prev) => {
++        const next = new Set(prev)
++        next.delete(session.id)
++        return next
++      })
++      showToast({
++        variant: 'error',
++        title: language.t('common.requestFailed'),
++        description: err instanceof Error ? err.message : String(err),
++      })
++    }
++  }
++
++  const handleScopeChange = (option: ScopeOption | undefined) => {
++    if (!option) return
++    setRemovedIds(new Set<string>())
++    setFilterScope(option.value)
++  }
++
++  return (
++    <div class="flex flex-col h-full overflow-y-auto no-scrollbar px-4 pb-10 sm:px-10 sm:pb-10">
++      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
++        <div class="flex flex-col gap-1 pt-6 pb-8 max-w-[720px]">
++          <h2 class="text-16-medium text-text-strong">{language.t("settings.archive.title")}</h2>
++          <p class="text-14-regular text-text-weak">{language.t("settings.archive.description")}</p>
++        </div>
++      </div>
++
++      <div class="flex flex-col gap-4 max-w-[720px]">
++        <Show when={hasMultipleProjects()}>
++          <RadioGroup
++            options={scopeOptions}
++            current={currentScopeOption() ?? undefined}
++            value={(o) => o.value}
++            size="small"
++            label={(o) => language.t(o.label)}
++            onSelect={handleScopeChange}
++          />
++        </Show>
++        <Show
++          when={!archivedSessions.loading}
++          fallback={
++            <div class="min-h-[700px]">
++              <SessionSkeleton count={4} />
++            </div>
++          }
++        >
++          <Show
++            when={displayedSessions().length}
++            fallback={
++              <div class="min-h-[700px]">
++                <div class="text-14-regular text-text-weak">{language.t("settings.archive.none")}</div>
++              </div>
++            }
++          >
++            <div class="min-h-[700px] flex flex-col gap-2">
++              <For each={displayedSessions()}>
++                {(session) => (
++                  <div class="flex items-center justify-between gap-4 px-3 py-1 rounded-md hover:bg-surface-raised-base-hover">
++                    <div class="flex items-center gap-x-3 grow min-w-0">
++                      <div class="flex items-center gap-2 min-w-0">
++                        <span class="text-14-regular text-text-strong truncate">{session.title}</span>
++                        <span class="text-14-regular text-text-weak truncate">{getSessionLabel(session)}</span>
++                      </div>
++                    </div>
++                    <div class="flex items-center gap-4 shrink-0">
++                      <Show when={session.time?.updated}>
++                        {(updated) => (
++                          <span class="text-12-regular text-text-weak whitespace-nowrap">
++                            {getRelativeTime(new Date(updated()).toISOString(), language.t)}
++                          </span>
++                        )}
++                      </Show>
++                      <Button
++                        size="normal"
++                        variant="secondary"
++                        onClick={() => unarchiveSession(session)}
++                      >
++                        {language.t("common.unarchive")}
++                      </Button>
++                    </div>
++                  </div>
++                )}
++              </For>
++            </div>
++          </Show>
++        </Show>
++      </div>
++    </div>
++  )
++}
+diff --git a/packages/app/src/components/dialog-settings.tsx b/packages/app/src/components/dialog-settings.tsx
+--- a/packages/app/src/components/dialog-settings.tsx
++++ b/packages/app/src/components/dialog-settings.tsx
+@@ -8,6 +8,7 @@ import { Component } from "solid-js"
+ import { SettingsKeybinds } from "./settings-keybinds"
+ import { SettingsProviders } from "./settings-providers"
+ import { SettingsModels } from "./settings-models"
++import { SettingsArchive } from "./settings-archive"
+ 
+ export const DialogSettings: Component = () => {
+   const language = useLanguage()
+@@ -47,6 +48,16 @@ export const DialogSettings: Component = () => {
+                     </Tabs.Trigger>
+                   </div>
+                 </div>
++
++                <div class="flex flex-col gap-1.5">
++                  <Tabs.SectionTitle>{language.t("settings.section.data")}</Tabs.SectionTitle>
++                  <div class="flex flex-col gap-1.5 w-full">
++                    <Tabs.Trigger value="archive">
++                      <Icon name="archive" />
++                      {language.t("settings.archive.title")}
++                    </Tabs.Trigger>
++                  </div>
++                </div>
+               </div>
+             </div>
+             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
+@@ -67,6 +77,9 @@ export const DialogSettings: Component = () => {
+         <Tabs.Content value="models" class="no-scrollbar">
+           <SettingsModels />
+         </Tabs.Content>
++        <Tabs.Content value="archive" class="no-scrollbar">
++          <SettingsArchive />
++        </Tabs.Content>
+       </Tabs>
+     </Dialog>
+   )
+diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
+--- a/packages/app/src/i18n/en.ts
++++ b/packages/app/src/i18n/en.ts
+@@ -585,6 +585,7 @@ export const dict = {
+   "common.rename": "Rename",
+   "common.reset": "Reset",
+   "common.archive": "Archive",
++  "common.unarchive": "Unarchive",
+   "common.delete": "Delete",
+   "common.close": "Close",
+   "common.edit": "Edit",
+@@ -613,6 +614,7 @@ export const dict = {
+ 
+   "settings.section.desktop": "Desktop",
+   "settings.section.server": "Server",
++  "settings.section.data": "Data",
+   "settings.tab.general": "General",
+   "settings.tab.shortcuts": "Shortcuts",
+   "settings.desktop.section.wsl": "WSL",
+@@ -844,4 +846,10 @@ export const dict = {
+   "workspace.reset.archived.one": "1 session will be archived.",
+   "workspace.reset.archived.many": "{{count}} sessions will be archived.",
+   "workspace.reset.note": "This will reset the workspace to match the default branch.",
++
++  "settings.archive.title": "Archived Sessions",
++  "settings.archive.description": "Restore archived sessions to make them visible in the sidebar.",
++  "settings.archive.none": "No archived sessions.",
++  "settings.archive.scope.all": "All projects",
++  "settings.archive.scope.current": "Current project",
+ }
+diff --git a/packages/app/src/i18n/ar.ts b/packages/app/src/i18n/ar.ts
+--- a/packages/app/src/i18n/ar.ts
++++ b/packages/app/src/i18n/ar.ts
+@@ -749,3 +749,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "متصل من متغيرات البيئة الخاصة بك",
+   "settings.providers.custom.description": "أضف مزود متوافق مع OpenAI بواسطة عنوان URL الأساسي.",
++
++  "common.unarchive": "إلغاء الأرشفة",
++  "settings.section.data": "البيانات",
++  "settings.archive.title": "الجلسات المؤرشفة",
++  "settings.archive.description": "استعادة الجلسات المؤرشفة لجعلها مرئية في الشريط الجانبي.",
++  "settings.archive.none": "لا توجد جلسات مؤرشفة.",
++  "settings.archive.scope.all": "جميع المشاريع",
++  "settings.archive.scope.current": "المشروع الحالي",
+ }
+diff --git a/packages/app/src/i18n/br.ts b/packages/app/src/i18n/br.ts
+--- a/packages/app/src/i18n/br.ts
++++ b/packages/app/src/i18n/br.ts
+@@ -757,3 +757,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Conectado a partir de suas variáveis de ambiente",
+   "settings.providers.custom.description": "Adicionar um provedor compatível com a OpenAI através do URL base.",
++
++  "common.unarchive": "Desarquivar",
++  "settings.section.data": "Dados",
++  "settings.archive.title": "Sessões arquivadas",
++  "settings.archive.description": "Restaure sessões arquivadas para torná-las visíveis na barra lateral.",
++  "settings.archive.none": "Nenhuma sessão arquivada.",
++  "settings.archive.scope.all": "Todos os projetos",
++  "settings.archive.scope.current": "Projeto atual",
+ }
+diff --git a/packages/app/src/i18n/bs.ts b/packages/app/src/i18n/bs.ts
+--- a/packages/app/src/i18n/bs.ts
++++ b/packages/app/src/i18n/bs.ts
+@@ -834,3 +834,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Povezano sa vašim varijablama okruženja",
+   "settings.providers.custom.description": "Dodajte provajdera kompatibilnog s OpenAI putem osnovnog URL-a.",
++
++  "common.unarchive": "Vrati iz arhive",
++  "settings.section.data": "Podaci",
++  "settings.archive.title": "Arhivirane sesije",
++  "settings.archive.description": "Vrati arhivirane sesije da bi bile vidljive u bočnoj traci.",
++  "settings.archive.none": "Nema arhiviranih sesija.",
++  "settings.archive.scope.all": "Svi projekti",
++  "settings.archive.scope.current": "Trenutni projekt",
+ }
+diff --git a/packages/app/src/i18n/da.ts b/packages/app/src/i18n/da.ts
+--- a/packages/app/src/i18n/da.ts
++++ b/packages/app/src/i18n/da.ts
+@@ -828,3 +828,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Tilsluttet fra dine miljøvariabler",
+   "settings.providers.custom.description": "Tilføj en OpenAI-kompatibel udbyder via basis-URL.",
++
++  "common.unarchive": "Fjern arkivering",
++  "settings.section.data": "Data",
++  "settings.archive.title": "Arkiverede sessioner",
++  "settings.archive.description": "Gendan arkiverede sessioner for at gøre dem synlige i sidebjælken.",
++  "settings.archive.none": "Ingen arkiverede sessioner.",
++  "settings.archive.scope.all": "Alle projekter",
++  "settings.archive.scope.current": "Nuværende projekt",
+ }
+diff --git a/packages/app/src/i18n/de.ts b/packages/app/src/i18n/de.ts
+--- a/packages/app/src/i18n/de.ts
++++ b/packages/app/src/i18n/de.ts
+@@ -766,3 +766,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Verbunden aus Ihren Umgebungsvariablen",
+   "settings.providers.custom.description": "Fügen Sie einen OpenAI-kompatiblen Anbieter per Basis-URL hinzu.",
++
++  "common.unarchive": "Archivierung aufheben",
++  "settings.section.data": "Daten",
++  "settings.archive.title": "Archivierte Sitzungen",
++  "settings.archive.description": "Archivierte Sitzungen wiederherstellen, um sie in der Seitenleiste anzuzeigen.",
++  "settings.archive.none": "Keine archivierten Sitzungen.",
++  "settings.archive.scope.all": "Alle Projekte",
++  "settings.archive.scope.current": "Aktuelles Projekt",
+ } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/es.ts b/packages/app/src/i18n/es.ts
+--- a/packages/app/src/i18n/es.ts
++++ b/packages/app/src/i18n/es.ts
+@@ -840,3 +840,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Conectado desde tus variables de entorno",
+   "settings.providers.custom.description": "Añade un proveedor compatible con OpenAI por su URL base.",
++
++  "common.unarchive": "Desarchivar",
++  "settings.section.data": "Datos",
++  "settings.archive.title": "Sesiones archivadas",
++  "settings.archive.description": "Restaura las sesiones archivadas para hacerlas visibles en la barra lateral.",
++  "settings.archive.none": "No hay sesiones archivadas.",
++  "settings.archive.scope.all": "Todos los proyectos",
++  "settings.archive.scope.current": "Proyecto actual",
+ }
+diff --git a/packages/app/src/i18n/fr.ts b/packages/app/src/i18n/fr.ts
+--- a/packages/app/src/i18n/fr.ts
++++ b/packages/app/src/i18n/fr.ts
+@@ -764,3 +764,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Connecté à partir de vos variables d'environnement",
+   "settings.providers.custom.description": "Ajouter un fournisseur compatible avec OpenAI via l'URL de base.",
++
++  "common.unarchive": "Désarchiver",
++  "settings.section.data": "Données",
++  "settings.archive.title": "Sessions archivées",
++  "settings.archive.description": "Restaurez les sessions archivées pour les rendre visibles dans la barre latérale.",
++  "settings.archive.none": "Aucune session archivée.",
++  "settings.archive.scope.all": "Tous les projets",
++  "settings.archive.scope.current": "Projet actuel",
+ }
+diff --git a/packages/app/src/i18n/ja.ts b/packages/app/src/i18n/ja.ts
+--- a/packages/app/src/i18n/ja.ts
++++ b/packages/app/src/i18n/ja.ts
+@@ -753,3 +753,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "環境変数から接続されました",
+   "settings.providers.custom.description": "ベース URL を指定して OpenAI 互換のプロバイダーを追加します。",
++
++  "common.unarchive": "アーカイブ解除",
++  "settings.section.data": "データ",
++  "settings.archive.title": "アーカイブされたセッション",
++  "settings.archive.description": "アーカイブされたセッションを復元してサイドバーに表示します。",
++  "settings.archive.none": "アーカイブされたセッションはありません。",
++  "settings.archive.scope.all": "すべてのプロジェクト",
++  "settings.archive.scope.current": "現在のプロジェクト",
+ }
+diff --git a/packages/app/src/i18n/ko.ts b/packages/app/src/i18n/ko.ts
+--- a/packages/app/src/i18n/ko.ts
++++ b/packages/app/src/i18n/ko.ts
+@@ -753,3 +753,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "환경 변수에서 연결됨",
+   "settings.providers.custom.description": "기본 URL로 OpenAI 호환 공급자를 추가합니다.",
++
++  "common.unarchive": "보관 해제",
++  "settings.section.data": "데이터",
++  "settings.archive.title": "보관된 세션",
++  "settings.archive.description": "보관된 세션을 복원하여 사이드바에 표시합니다.",
++  "settings.archive.none": "보관된 세션이 없습니다.",
++  "settings.archive.scope.all": "모든 프로젝트",
++  "settings.archive.scope.current": "현재 프로젝트",
+ }
+diff --git a/packages/app/src/i18n/no.ts b/packages/app/src/i18n/no.ts
+--- a/packages/app/src/i18n/no.ts
++++ b/packages/app/src/i18n/no.ts
+@@ -836,3 +836,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Koblet til fra miljøvariablene dine",
+   "settings.providers.custom.description": "Legg til en OpenAI-kompatibel leverandør via basis-URL.",
++
++  "common.unarchive": "Fjern arkivering",
++  "settings.section.data": "Data",
++  "settings.archive.title": "Arkiverte økter",
++  "settings.archive.description": "Gjenopprett arkiverte økter for å gjøre dem synlige i sidefeltet.",
++  "settings.archive.none": "Ingen arkiverte økter.",
++  "settings.archive.scope.all": "Alle prosjekter",
++  "settings.archive.scope.current": "Nåværende prosjekt",
+ } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/pl.ts b/packages/app/src/i18n/pl.ts
+--- a/packages/app/src/i18n/pl.ts
++++ b/packages/app/src/i18n/pl.ts
+@@ -755,3 +755,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Połączono ze zmiennymi środowiskowymi",
+   "settings.providers.custom.description": "Dodaj dostawcę zgodnego z OpenAI poprzez podstawowy URL.",
++
++  "common.unarchive": "Przywróć z archiwum",
++  "settings.section.data": "Dane",
++  "settings.archive.title": "Zarchiwizowane sesje",
++  "settings.archive.description": "Przywróć zarchiwizowane sesje, aby były widoczne na pasku bocznym.",
++  "settings.archive.none": "Brak zarchiwizowanych sesji.",
++  "settings.archive.scope.all": "Wszystkie projekty",
++  "settings.archive.scope.current": "Bieżący projekt",
+ }
+diff --git a/packages/app/src/i18n/ru.ts b/packages/app/src/i18n/ru.ts
+--- a/packages/app/src/i18n/ru.ts
++++ b/packages/app/src/i18n/ru.ts
+@@ -836,3 +836,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Подключено из ваших переменных окружения",
+   "settings.providers.custom.description": "Добавить провайдера, совместимого с OpenAI, по базовому URL.",
++
++  "common.unarchive": "Разархивировать",
++  "settings.section.data": "Данные",
++  "settings.archive.title": "Архивированные сессии",
++  "settings.archive.description": "Восстановите архивированные сессии, чтобы они отображались на боковой панели.",
++  "settings.archive.none": "Нет архивированных сессий.",
++  "settings.archive.scope.all": "Все проекты",
++  "settings.archive.scope.current": "Текущий проект",
+ }
+diff --git a/packages/app/src/i18n/th.ts b/packages/app/src/i18n/th.ts
+--- a/packages/app/src/i18n/th.ts
++++ b/packages/app/src/i18n/th.ts
+@@ -826,3 +826,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "เชื่อมต่อจากตัวแปรสภาพแวดล้อมของคุณ",
+   "settings.providers.custom.description": "เพิ่มผู้ให้บริการที่รองรับ OpenAI ด้วย URL หลัก",
++
++  "common.unarchive": "ยกเลิกการจัดเก็บ",
++  "settings.section.data": "ข้อมูล",
++  "settings.archive.title": "เซสชันที่เก็บถาวร",
++  "settings.archive.description": "กู้คืนเซสชันที่เก็บถาวรเพื่อให้แสดงในแถบด้านข้าง",
++  "settings.archive.none": "ไม่มีเซสชันที่เก็บถาวร",
++  "settings.archive.scope.all": "ทุกโปรเจกต์",
++  "settings.archive.scope.current": "โปรเจกต์ปัจจุบัน",
+ }
+diff --git a/packages/app/src/i18n/tr.ts b/packages/app/src/i18n/tr.ts
+--- a/packages/app/src/i18n/tr.ts
++++ b/packages/app/src/i18n/tr.ts
+@@ -847,3 +847,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "Ortam değişkenlerinizden bağlandı",
+   "settings.providers.custom.description": "Temel URL üzerinden OpenAI uyumlu bir sağlayıcı ekleyin.",
++
++  "common.unarchive": "Arşivden çıkar",
++  "settings.section.data": "Veri",
++  "settings.archive.title": "Arşivlenen oturumlar",
++  "settings.archive.description": "Arşivlenen oturumları geri yükleyerek kenar çubuğunda görünür hale getirin.",
++  "settings.archive.none": "Arşivlenen oturum yok.",
++  "settings.archive.scope.all": "Tüm projeler",
++  "settings.archive.scope.current": "Mevcut proje",
+ } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/zh.ts b/packages/app/src/i18n/zh.ts
+--- a/packages/app/src/i18n/zh.ts
++++ b/packages/app/src/i18n/zh.ts
+@@ -824,3 +824,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "已通过环境变量连接",
+   "settings.providers.custom.description": "通过基础 URL 添加与 OpenAI 兼容的提供商。",
++
++  "common.unarchive": "取消归档",
++  "settings.section.data": "数据",
++  "settings.archive.title": "已归档的会话",
++  "settings.archive.description": "恢复已归档的会话以使其在侧边栏中可见。",
++  "settings.archive.none": "没有已归档的会话。",
++  "settings.archive.scope.all": "所有项目",
++  "settings.archive.scope.current": "当前项目",
+ } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/zht.ts b/packages/app/src/i18n/zht.ts
+--- a/packages/app/src/i18n/zht.ts
++++ b/packages/app/src/i18n/zht.ts
+@@ -819,3 +819,11 @@ export const dict = {
+   "settings.providers.connected.environmentDescription": "已從環境變數連線",
+   "settings.providers.custom.description": "透過基本 URL 新增與 OpenAI 相容的提供者。",
++
++  "common.unarchive": "取消封存",
++  "settings.section.data": "資料",
++  "settings.archive.title": "已封存的工作階段",
++  "settings.archive.description": "還原已封存的工作階段以使其顯示在側邊欄中。",
++  "settings.archive.none": "沒有已封存的工作階段。",
++  "settings.archive.scope.all": "所有專案",
++  "settings.archive.scope.current": "目前專案",
+ } satisfies Partial<Record<Keys, string>>
