@@ -180,21 +180,17 @@ index a7f503d5a..3765e91d4 100644
 +      const message = messages.find((item) => item.id === parentID)
        if (message && message.role === "user") return message.id
      }
- 
+
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 4f77920cc..072ae2544 100644
+index 4f77920cc..4343c4d64 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -566,7 +566,11 @@ export namespace SessionPrompt {
- 
-       const processor = SessionProcessor.create({
-         assistantMessage: (await Session.updateMessage({
--          id: Identifier.ascending("message"),
-+          id: Identifier.create(
-+            "message",
-+            false,
-+            Math.max(Date.now(), Identifier.timestamp(lastUser.id) + 1),
-+          ),
-           parentID: lastUser.id,
-           role: "assistant",
-           mode: agent.name,
+@@ -318,7 +318,7 @@ export namespace SessionPrompt {
+       if (
+         lastAssistant?.finish &&
+         !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
+-        lastUser.id < lastAssistant.id
++        lastAssistant.parentID === lastUser.id
+       ) {
+         log.info("exiting loop", { sessionID })
+         break
