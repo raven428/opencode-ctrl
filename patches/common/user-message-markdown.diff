@@ -1,0 +1,74 @@
+diff --git a/packages/ui/src/components/message-part.css b/packages/ui/src/components/message-part.css
+index 3eee45c75..b1f454217 100644
+--- a/packages/ui/src/components/message-part.css
++++ b/packages/ui/src/components/message-part.css
+@@ -99,8 +99,7 @@
+   }
+ 
+   [data-slot="user-message-text"] {
+-    display: inline-block;
+-    white-space: pre-wrap;
++    display: block;
+     word-break: break-word;
+     overflow: hidden;
+     background: var(--surface-base);
+@@ -108,20 +107,39 @@
+     padding: 8px 12px;
+     border-radius: 6px;
+     transition: opacity 0.3s ease;
++    max-width: 100%;
+ 
+     &[data-queued] {
+       opacity: 0.6;
+     }
+ 
+-    [data-highlight="file"] {
+-      color: var(--syntax-property);
+-    }
++    [data-component="markdown"] {
++      font-size: inherit;
++      line-height: inherit;
+ 
+-    [data-highlight="agent"] {
+-      color: var(--syntax-type);
+-    }
++      > *:last-child {
++        margin-bottom: 0;
++      }
+ 
+-    max-width: 100%;
++      p {
++        margin-bottom: 0.5rem;
++      }
++
++      ul,
++      ol {
++        margin-top: 0.25rem;
++        margin-bottom: 0.5rem;
++      }
++
++      li {
++        margin-bottom: 0.25rem;
++      }
++
++      pre {
++        margin-top: 0.5rem;
++        margin-bottom: 0.5rem;
++      }
++    }
+   }
+ 
+   [data-slot="user-message-queued-indicator"] {
+diff --git a/packages/ui/src/components/message-part.tsx b/packages/ui/src/components/message-part.tsx
+index a2896dc38..78add11b6 100644
+--- a/packages/ui/src/components/message-part.tsx
++++ b/packages/ui/src/components/message-part.tsx
+@@ -918,7 +918,7 @@ export function UserMessageDisplay(props: {
+         <>
+           <div data-slot="user-message-body">
+             <div data-slot="user-message-text" data-queued={props.queued ? "" : undefined}>
+-              <HighlightedText text={text()} references={inlineFiles()} agents={agents()} />
++              <Markdown text={text()} cacheKey={textPart()?.id} />
+             </div>
+             <Show when={props.queued}>
+               <div data-slot="user-message-queued-indicator">
