@@ -1,0 +1,51 @@
+diff --git a/packages/opencode/src/session/message-v2.ts b/packages/opencode/src/session/message-v2.ts
+index 5b4e7bdbc..e49b084a4 100644
+--- a/packages/opencode/src/session/message-v2.ts
++++ b/packages/opencode/src/session/message-v2.ts
+@@ -882,6 +882,15 @@ export namespace MessageV2 {
+           },
+           { cause: e },
+         ).toObject()
++      case e instanceof Error && /certificate/i.test((e as Error).message):
++        return new MessageV2.APIError(
++          {
++            message: (e as Error).message,
++            isRetryable: true,
++            metadata: { message: (e as Error).message },
++          },
++          { cause: e },
++        ).toObject()
+       case e instanceof Error:
+         return new NamedError.Unknown({ message: e.toString() }, { cause: e }).toObject()
+       default:
+diff --git a/packages/opencode/src/session/retry.ts b/packages/opencode/src/session/retry.ts
+index 6d057f539..7c55132e9 100644
+--- a/packages/opencode/src/session/retry.ts
++++ b/packages/opencode/src/session/retry.ts
+@@ -6,6 +6,7 @@ export namespace SessionRetry {
+   export const RETRY_INITIAL_DELAY = 2000
+   export const RETRY_BACKOFF_FACTOR = 2
+   export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
++  export const RETRY_MAX_DELAY_OVERLOAD = 11_000 // 11 seconds cap for overload retries
+   export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
+
+   export async function sleep(ms: number, signal: AbortSignal): Promise<void> {
+@@ -51,7 +52,18 @@ export namespace SessionRetry {
+           }
+         }
+
+-        return RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1)
++        // Increase by 1 second every 3 attempts, cap at RETRY_MAX_DELAY_OVERLOAD.
++        // After 3 consecutive max-delay attempts reset back to RETRY_INITIAL_DELAY.
++        // Full cycle: 11 steps * 3 attempts + 3 max = 36 attempts per period.
++        const OVERLOAD_STEPS = RETRY_MAX_DELAY_OVERLOAD / 1_000 // 11
++        const CYCLE = OVERLOAD_STEPS * 3 + 3 // 36
++        const isReset = attempt > 1 && (attempt - 1) % CYCLE === 0
++        if (isReset) return RETRY_INITIAL_DELAY
++        const effectiveAttempt = ((attempt - 1) % CYCLE) + 1
++        return Math.min(
++          (Math.floor((effectiveAttempt - 1) / 3) + 1) * 1_000,
++          RETRY_MAX_DELAY_OVERLOAD,
++        )
+       }
+     }
