@@ -1,0 +1,28 @@
+diff --git a/packages/ui/src/components/markdown.css b/packages/ui/src/components/markdown.css
+index 1fe11a7de..752059aa9 100644
+--- a/packages/ui/src/components/markdown.css
++++ b/packages/ui/src/components/markdown.css
+@@ -197,11 +197,20 @@
+   pre {
+     margin-top: 2rem;
+     margin-bottom: 2rem;
+-    overflow: auto;
++    overflow-x: auto;
++    overflow-y: hidden;
+ 
+-    scrollbar-width: none;
++    scrollbar-width: thin;
++    scrollbar-color: var(--border-weak-base) transparent;
+     &::-webkit-scrollbar {
+-      display: none;
++      height: 6px;
++    }
++    &::-webkit-scrollbar-track {
++      background: transparent;
++    }
++    &::-webkit-scrollbar-thumb {
++      background: var(--border-weak-base);
++      border-radius: 3px;
+     }
+   }
+ 

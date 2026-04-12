@@ -1,0 +1,43 @@
+# Контекст репозитория
+
+Этот репо – набор патчей и скриптов для сборки форка [opencode](https://github.com/anomalyco/opencode).
+Оригинальный исходный код opencode доступен локально в `/workspace/github/opencode`.
+
+## Структура
+
+- `patches/common/` – патчи, применяемые на обе платформы (linux и windows)
+- `patches/linux/` – патчи только для linux-сборки
+- `patches/windows/` – патчи только для windows-сборки
+- `scripts/` – bash-скрипты сборки и подготовки окружения
+- `.github/workflows/build.yaml` – CI: клонирует opencode, применяет патчи, собирает артефакты
+
+## Как работает сборка
+
+1. GitHub Actions клонирует opencode по тегу `OPENCODE_VERSION`
+2. Применяет патчи через `scripts/patch.sh`
+3. Собирает CLI (`scripts/build-cli.sh`) и desktop-приложение (`scripts/build-desktop.sh`)
+4. Загружает артефакты как GitHub Release (черновик для веток, настоящий релиз для тегов)
+
+## Патчи
+
+Каждый `.diff` в `patches/common/` – это `git diff` относительно оригинального репо opencode.
+Применяются через `patch -p1`. Порядок применения – алфавитный (по имени файла).
+
+Текущие патчи в `patches/common/`:
+
+- `ctrl-enter` – отправка сообщений по `Ctrl-Enter` вместо `Enter` в WebUI и Desktop
+- `local-webui` – `opencode web` открывает локальный WebUI вместо `app.opencode.ai`
+- `markdown-code-scrollbar` – горизонтальный скроллбар в блоках кода вместо обрезки
+- `retry-overload-cap` – ограничение задержки retry при overload до 11s, certificate errors как retryable
+- `server-message-id` – исправление дублирования ответа модели при рассинхроне часов
+- `timestamp-24h` – временны́е метки сообщений в 24h формате с датой (YYYY-MM-DD HH:mm)
+- `tmux-clipboard` – обходное решение для копирования в TUI внутри tmux
+- `unarchive-sessions` – поддержка разархивирования сессий
+- `user-message-markdown` – рендер сообщений пользователя как markdown
+
+## Правила правки патчей
+
+- Патч должен применяться чистым `patch -p1` без rejects
+- Контекстные строки (без `+`/`-`) должны точно совпадать с оригиналом в `/workspace/github/opencode`
+- Номера строк в заголовках `@@ ... @@` должны соответствовать реальным после предыдущих изменений в том же файле
+- Не трогать строки и комментарии вне scope запроса

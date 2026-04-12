@@ -163,7 +163,7 @@ diff --git a/packages/app/src/pages/session/message-timeline.tsx b/packages/app/
 index a7f503d5a..3765e91d4 100644
 --- a/packages/app/src/pages/session/message-timeline.tsx
 +++ b/packages/app/src/pages/session/message-timeline.tsx
-@@ -12,7 +12,6 @@ import { SessionTurn } from "@opencode-ai/ui/session-turn"
+@@ -12,7 +12,6 @@
  import { ScrollView } from "@opencode-ai/ui/scroll-view"
  import type { AssistantMessage, Message as MessageType, Part, TextPart, UserMessage } from "@opencode-ai/sdk/v2"
  import { showToast } from "@opencode-ai/ui/toast"
@@ -171,30 +171,39 @@ index a7f503d5a..3765e91d4 100644
  import { getFilename } from "@opencode-ai/util/path"
  import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
  import { SessionContextUsage } from "@/components/session-context-usage"
-@@ -239,8 +238,7 @@ export function MessageTimeline(props: {
+@@ -225,6 +224,11 @@
+     if (!id) return emptyMessages
+     return sync.data.message[id] ?? emptyMessages
+   })
++  const sessionMessagesByID = createMemo(() => {
++    const map = new Map<string, MessageType>()
++    for (const m of sessionMessages()) map.set(m.id, m)
++    return map
++  })
+   const pending = createMemo(() =>
+     sessionMessages().findLast(
+       (item): item is AssistantMessage => item.role === "assistant" && typeof item.time.completed !== "number",
+@@ -238,9 +242,7 @@
+   const activeMessageID = createMemo(() => {
      const parentID = pending()?.parentID
      if (parentID) {
-       const messages = sessionMessages()
+-      const messages = sessionMessages()
 -      const result = Binary.search(messages, parentID, (message) => message.id)
 -      const message = result.found ? messages[result.index] : messages.find((item) => item.id === parentID)
-+      const message = messages.find((item) => item.id === parentID)
++      const message = sessionMessagesByID().get(parentID)
        if (message && message.role === "user") return message.id
      }
  
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 4f77920cc..072ae2544 100644
+index 4f77920cc..4343c4d64 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -566,7 +566,11 @@ export namespace SessionPrompt {
- 
-       const processor = SessionProcessor.create({
-         assistantMessage: (await Session.updateMessage({
--          id: Identifier.ascending("message"),
-+          id: Identifier.create(
-+            "message",
-+            false,
-+            Math.max(Date.now(), Identifier.timestamp(lastUser.id) + 1),
-+          ),
-           parentID: lastUser.id,
-           role: "assistant",
-           mode: agent.name,
+@@ -318,7 +318,7 @@ export namespace SessionPrompt {
+       if (
+         lastAssistant?.finish &&
+         !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
+-        lastUser.id < lastAssistant.id
++        lastAssistant.parentID === lastUser.id
+       ) {
+         log.info("exiting loop", { sessionID })
+         break
