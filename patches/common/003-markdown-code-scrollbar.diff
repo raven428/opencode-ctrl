@@ -26,3 +26,49 @@ index 1fe11a7de..752059aa9 100644
      }
    }
  
+diff --git a/packages/ui/src/components/message-part.css b/packages/ui/src/components/message-part.css
+index 3eee45c75..3ba5e6b56 100644
+--- a/packages/ui/src/components/message-part.css
++++ b/packages/ui/src/components/message-part.css
+@@ -372,11 +372,19 @@
+     height: auto;
+     max-height: 240px;
+     overflow-y: auto;
+-    scrollbar-width: none;
++    scrollbar-width: thin;
++    scrollbar-color: var(--border-weak-base) transparent;
+     -ms-overflow-style: none;
+ 
+     &::-webkit-scrollbar {
+-      display: none;
++      width: 6px;
++    }
++    &::-webkit-scrollbar-track {
++      background: transparent;
++    }
++    &::-webkit-scrollbar-thumb {
++      background: var(--border-weak-base);
++      border-radius: 3px;
+     }
+ 
+     [data-component="markdown"] {
+@@ -423,9 +431,17 @@
+     overflow-x: hidden;
+     max-height: 240px;
+ 
+-    scrollbar-width: none;
++    scrollbar-width: thin;
++    scrollbar-color: var(--border-weak-base) transparent;
+     &::-webkit-scrollbar {
+-      display: none;
++      width: 6px;
++    }
++    &::-webkit-scrollbar-track {
++      background: transparent;
++    }
++    &::-webkit-scrollbar-thumb {
++      background: var(--border-weak-base);
++      border-radius: 3px;
+     }
+   }
+ 
