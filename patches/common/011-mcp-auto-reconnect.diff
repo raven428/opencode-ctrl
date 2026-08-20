@@ -1,0 +1,436 @@
+diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
+index 0dca27d..83d05ca 100644
+--- a/packages/opencode/src/mcp/index.ts
++++ b/packages/opencode/src/mcp/index.ts
+@@ -27,6 +27,37 @@ import open from "open"
+ export namespace MCP {
+   const log = Log.create({ service: "mcp" })
+   const DEFAULT_TIMEOUT = 30_000
++  const RECONNECT_INITIAL_DELAY = 1_000
++  const RECONNECT_MAX_DELAY = 11_000
++  const RECONNECT_STEP_ATTEMPTS = 3
++  const RECONNECT_CYCLE = 36
++  const LIST_TOOLS_TTL = 60 * 60 * 1000
++
++  function reconnectDelay(attempt: number): number {
++    const isReset = attempt > 1 && (attempt - 1) % RECONNECT_CYCLE === 0
++    if (isReset) return RECONNECT_INITIAL_DELAY
++    const effectiveAttempt = ((attempt - 1) % RECONNECT_CYCLE) + 1
++    return Math.min(
++      (Math.floor((effectiveAttempt - 1) / RECONNECT_STEP_ATTEMPTS) + 1) * 1_000,
++      RECONNECT_MAX_DELAY,
++    )
++  }
++
++  function isSessionExpired(error: unknown): boolean {
++    if (!error) return false
++    const message = error instanceof Error ? error.message : String(error)
++    if (/session terminated|session expired|invalid session/i.test(message)) return true
++    const status = (error as { status?: unknown }).status
++    return typeof status === "number" && status === 404
++  }
++
++  function reconnectReason(error: unknown): "sessionExpired" | "networkError" | "rateLimit" | "unknown" {
++    if (isSessionExpired(error)) return "sessionExpired"
++    const message = error instanceof Error ? error.message : String(error)
++    if (/rate.?limit|too many requests|429/i.test(message)) return "rateLimit"
++    if (/timeout|timed out|econnrefused|enotfound|eai_again|fetch failed|network/i.test(message)) return "networkError"
++    return "unknown"
++  }
+ 
+   export const Resource = z
+     .object({
+@@ -63,6 +94,24 @@ export namespace MCP {
+ 
+   type MCPClient = Client
+ 
++  type ReconnectState = {
++    attempt: number
++    cancelled: boolean
++    inFlight?: Promise<void>
++    wakeup?: () => void
++    timer?: ReturnType<typeof setTimeout>
++  }
++
++  type ToolsCacheEntry = { tools: MCPToolDef[]; expiresAt: number }
++
++  type McpState = {
++    status: Record<string, Status>
++    clients: Record<string, MCPClient>
++    reconnect: Record<string, ReconnectState>
++    toolsCache: Record<string, ToolsCacheEntry>
++    activeSteps: number
++  }
++
+   export const Status = z
+     .discriminatedUnion("status", [
+       z
+@@ -112,12 +161,20 @@ export namespace MCP {
+   function registerNotificationHandlers(client: MCPClient, serverName: string) {
+     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+       log.info("tools list changed notification received", { server: serverName })
++      void state().then((s) => {
++        delete s.toolsCache[serverName]
++      })
+       Bus.publish(ToolsChanged, { server: serverName })
+     })
+   }
+ 
+   // Convert MCP tool definition to AI SDK Tool type
+-  async function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Promise<Tool> {
++  async function convertMcpTool(
++    mcpTool: MCPToolDef,
++    client: MCPClient,
++    timeout?: number,
++    serverName?: string,
++  ): Promise<Tool> {
+     const inputSchema = mcpTool.inputSchema
+ 
+     // Spread first, then override type to ensure it's always "object"
+@@ -132,17 +189,28 @@ export namespace MCP {
+       description: mcpTool.description ?? "",
+       inputSchema: jsonSchema(schema),
+       execute: async (args: unknown) => {
+-        return client.callTool(
+-          {
+-            name: mcpTool.name,
+-            arguments: (args || {}) as Record<string, unknown>,
+-          },
+-          CallToolResultSchema,
+-          {
+-            resetTimeoutOnProgress: true,
+-            timeout,
+-          },
+-        )
++        const callArgs = {
++          name: mcpTool.name,
++          arguments: (args || {}) as Record<string, unknown>,
++        }
++        const callOpts = {
++          resetTimeoutOnProgress: true,
++          timeout,
++        }
++        try {
++          return await client.callTool(callArgs, CallToolResultSchema, callOpts)
++        } catch (error) {
++          if (!serverName || !isSessionExpired(error)) throw error
++          const s = await state()
++          s.status[serverName] = {
++            status: "failed",
++            error: error instanceof Error ? error.message : String(error),
++          }
++          await ensureConnected(serverName)
++          const fresh = s.clients[serverName]
++          if (!fresh || fresh === client) throw error
++          return await fresh.callTool(callArgs, CallToolResultSchema, callOpts)
++        }
+       },
+     })
+   }
+@@ -188,6 +256,8 @@ export namespace MCP {
+       const config = cfg.mcp ?? {}
+       const clients: Record<string, MCPClient> = {}
+       const status: Record<string, Status> = {}
++      const reconnect: Record<string, ReconnectState> = {}
++      const toolsCache: Record<string, ToolsCacheEntry> = {}
+ 
+       await Promise.all(
+         Object.entries(config).map(async ([key, mcp]) => {
+@@ -215,9 +285,17 @@ export namespace MCP {
+       return {
+         status,
+         clients,
+-      }
++        reconnect,
++        toolsCache,
++        activeSteps: 0,
++      } satisfies McpState
+     },
+     async (state) => {
++      // Stop background reconnect loops so they do not outlive the state
++      for (const entry of Object.values(state.reconnect ?? {})) {
++        entry.cancelled = true
++        entry.wakeup?.()
++      }
+       // The MCP SDK only signals the direct child process on close.
+       // Servers like chrome-devtools-mcp spawn grandchild processes
+       // (e.g. Chrome) that the SDK never reaches, leaving them orphaned.
+@@ -246,6 +324,156 @@ export namespace MCP {
+     },
+   )
+ 
++  async function setClient(s: McpState, name: string, client: MCPClient, clientStatus: Status) {
++    const existingClient = s.clients[name]
++    // Write synchronously before awaiting close() so a concurrent setClient
++    // (manual toggle vs background reconnect) never leaves a stale client
++    // recorded in state
++    s.clients[name] = client
++    s.status[name] = clientStatus
++    delete s.toolsCache[name]
++    if (existingClient && existingClient !== client) {
++      await existingClient.close().catch((error) => {
++        log.error("Failed to close existing MCP client", { name, error })
++      })
++    }
++  }
++
++  function cancelReconnect(s: McpState, name: string) {
++    const entry = s.reconnect[name]
++    if (!entry) return
++    // Mark cancelled and wake the loop, but keep the entry: the dying loop
++    // owns it and cleans up in its finally. scheduleReconnect replaces a
++    // cancelled entry with a fresh one instead of reusing it
++    entry.cancelled = true
++    entry.wakeup?.()
++  }
++
++  function reconnectSleep(entry: ReconnectState, ms: number): Promise<void> {
++    return new Promise((resolve) => {
++      entry.wakeup = () => {
++        if (entry.timer) clearTimeout(entry.timer)
++        entry.timer = undefined
++        entry.wakeup = undefined
++        resolve()
++      }
++      entry.timer = setTimeout(
++        () => {
++          entry.timer = undefined
++          entry.wakeup = undefined
++          resolve()
++        },
++        Math.min(ms, 2_147_483_647),
++      )
++      entry.timer.unref?.()
++    })
++  }
++
++  async function reconnectLoop(s: McpState, name: string, entry: ReconnectState) {
++    try {
++      while (!entry.cancelled && s.activeSteps > 0) {
++        const cfg = await Config.get()
++        const mcp = (cfg.mcp ?? {})[name]
++        if (!mcp || !isMcpConfigured(mcp) || mcp.enabled === false) break
++        let failure: unknown
++        try {
++          const result = await create(name, mcp)
++          if (result.mcpClient) {
++            // Cancelled while create() was in flight (manual toggle won the
++            // race): discard this client, the winner installs its own
++            if (entry.cancelled) {
++              await result.mcpClient.close().catch(() => undefined)
++              break
++            }
++            entry.attempt = 0
++            log.info("mcp reconnected", { key: name })
++            await setClient(s, name, result.mcpClient, result.status)
++            break
++          }
++          if (result.status.status === "needs_auth" || result.status.status === "needs_client_registration") {
++            log.info("mcp reconnect stopped: manual intervention required", { key: name, status: result.status.status })
++            break
++          }
++          if (result.status.status === "failed") failure = result.status.error
++        } catch (error) {
++          failure = error
++        }
++        const expired = isSessionExpired(failure)
++        entry.attempt = expired ? 0 : entry.attempt + 1
++        const delay = expired ? 0 : reconnectDelay(entry.attempt)
++        log.warn("mcp reconnect failed", {
++          key: name,
++          attempt: entry.attempt,
++          delay,
++          reason: reconnectReason(failure),
++        })
++        await reconnectSleep(entry, delay)
++        if (entry.cancelled) break
++        if (s.activeSteps === 0) {
++          log.info("mcp reconnect stopped: no active steps", { key: name })
++          break
++        }
++      }
++    } finally {
++      if (s.reconnect[name] === entry) entry.inFlight = undefined
++    }
++  }
++
++  function scheduleReconnect(s: McpState, name: string, immediate = false) {
++    const currentStatus = s.status[name]?.status
++    if (currentStatus === "needs_auth" || currentStatus === "needs_client_registration") return
++    let entry = s.reconnect[name]
++    if (!entry || entry.cancelled) {
++      // A cancelled entry belongs to a loop that is winding down; start a
++      // fresh one instead of racing the dying loop for the same slot
++      entry = { attempt: 0, cancelled: false }
++      s.reconnect[name] = entry
++      log.info("mcp reconnect scheduled", { key: name, attempt: entry.attempt })
++    }
++    if (immediate) {
++      entry.attempt = 0
++      entry.wakeup?.()
++      if (entry.inFlight) return entry.inFlight
++      entry.inFlight = reconnectLoop(s, name, entry).catch(() => undefined)
++      return entry.inFlight
++    }
++    if (entry.inFlight) return entry.inFlight
++    entry.inFlight = reconnectLoop(s, name, entry).catch(() => undefined)
++    return entry.inFlight
++  }
++
++  export async function ensureConnected(name: string) {
++    const s = await state()
++    if (s.status[name]?.status === "connected" && s.clients[name]) return
++    const cfg = await Config.get()
++    const mcp = (cfg.mcp ?? {})[name]
++    if (!mcp || !isMcpConfigured(mcp) || mcp.enabled === false) return
++    let entry = s.reconnect[name]
++    if (!entry || entry.cancelled) {
++      entry = { attempt: 0, cancelled: false }
++      s.reconnect[name] = entry
++    } else {
++      entry.attempt = 0
++      entry.wakeup?.()
++    }
++    if (!entry.inFlight) entry.inFlight = reconnectLoop(s, name, entry).catch(() => undefined)
++    await withTimeout(entry.inFlight, DEFAULT_TIMEOUT).catch(() => undefined)
++  }
++
++  export async function beginStep() {
++    const s = await state()
++    s.activeSteps++
++    for (const [name, st] of Object.entries(s.status)) {
++      if (st.status !== "failed") continue
++      void scheduleReconnect(s, name)
++    }
++  }
++
++  export async function endStep() {
++    const s = await state()
++    if (s.activeSteps > 0) s.activeSteps--
++  }
++
+   // Helper function to fetch prompts for a specific client
+   async function fetchPromptsForClient(clientName: string, client: Client) {
+     const prompts = await client.listPrompts().catch((e) => {
+@@ -310,15 +538,8 @@ export namespace MCP {
+         status: s.status,
+       }
+     }
+-    // Close existing client if present to prevent memory leaks
+-    const existingClient = s.clients[name]
+-    if (existingClient) {
+-      await existingClient.close().catch((error) => {
+-        log.error("Failed to close existing MCP client", { name, error })
+-      })
+-    }
+-    s.clients[name] = result.mcpClient
+-    s.status[name] = result.status
++    cancelReconnect(s, name)
++    await setClient(s, name, result.mcpClient, result.status)
+ 
+     return {
+       status: s.status,
+@@ -577,19 +798,14 @@ export namespace MCP {
+     const s = await state()
+     s.status[name] = result.status
+     if (result.mcpClient) {
+-      // Close existing client if present to prevent memory leaks
+-      const existingClient = s.clients[name]
+-      if (existingClient) {
+-        await existingClient.close().catch((error) => {
+-          log.error("Failed to close existing MCP client", { name, error })
+-        })
+-      }
+-      s.clients[name] = result.mcpClient
++      cancelReconnect(s, name)
++      await setClient(s, name, result.mcpClient, result.status)
+     }
+   }
+ 
+   export async function disconnect(name: string) {
+     const s = await state()
++    cancelReconnect(s, name)
+     const client = s.clients[name]
+     if (client) {
+       await client.close().catch((error) => {
+@@ -597,6 +813,7 @@ export namespace MCP {
+       })
+       delete s.clients[name]
+     }
++    delete s.toolsCache[name]
+     s.status[name] = { status: "disabled" }
+   }
+ 
+@@ -608,35 +825,51 @@ export namespace MCP {
+     const clientsSnapshot = await clients()
+     const defaultTimeout = cfg.experimental?.mcp_timeout
+ 
++    // Agent step is active: kick background reconnect for failed servers
++    for (const [name, st] of Object.entries(s.status)) {
++      if (st.status !== "failed") continue
++      void scheduleReconnect(s, name)
++    }
++
+     const connectedClients = Object.entries(clientsSnapshot).filter(
+       ([clientName]) => s.status[clientName]?.status === "connected",
+     )
+ 
+     const toolsResults = await Promise.all(
+       connectedClients.map(async ([clientName, client]) => {
++        const cached = s.toolsCache[clientName]
++        if (cached && Date.now() < cached.expiresAt) {
++          return { clientName, client, tools: cached.tools }
++        }
+         const toolsResult = await client.listTools().catch((e) => {
+           log.error("failed to get tools", { clientName, error: e.message })
+-          const failedStatus = {
++          s.status[clientName] = {
+             status: "failed" as const,
+             error: e instanceof Error ? e.message : String(e),
+           }
+-          s.status[clientName] = failedStatus
+-          delete s.clients[clientName]
++          void scheduleReconnect(s, clientName, isSessionExpired(e))
+           return undefined
+         })
+-        return { clientName, client, toolsResult }
++        if (!toolsResult) return { clientName, client, tools: undefined }
++        s.toolsCache[clientName] = { tools: toolsResult.tools, expiresAt: Date.now() + LIST_TOOLS_TTL }
++        return { clientName, client, tools: toolsResult.tools }
+       }),
+     )
+ 
+-    for (const { clientName, client, toolsResult } of toolsResults) {
+-      if (!toolsResult) continue
++    for (const { clientName, client, tools: mcpTools } of toolsResults) {
++      if (!mcpTools) continue
+       const mcpConfig = config[clientName]
+       const entry = isMcpConfigured(mcpConfig) ? mcpConfig : undefined
+       const timeout = entry?.timeout ?? defaultTimeout
+-      for (const mcpTool of toolsResult.tools) {
++      for (const mcpTool of mcpTools) {
+         const sanitizedClientName = clientName.replace(/[^a-zA-Z0-9_-]/g, "_")
+         const sanitizedToolName = mcpTool.name.replace(/[^a-zA-Z0-9_-]/g, "_")
+-        result[sanitizedClientName + "_" + sanitizedToolName] = await convertMcpTool(mcpTool, client, timeout)
++        result[sanitizedClientName + "_" + sanitizedToolName] = await convertMcpTool(
++          mcpTool,
++          client,
++          timeout,
++          clientName,
++        )
+       }
+     }
+     return result
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 4343c4d..df7d39e 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -283,6 +283,8 @@ export namespace SessionPrompt {
+     }
+ 
+     using _ = defer(() => cancel(sessionID))
++    await using _mcpSteps = defer(() => MCP.endStep())
++    void MCP.beginStep().catch(() => undefined)
+ 
+     // Structured output state
+     // Note: On session resumption, state is reset but outputFormat is preserved
