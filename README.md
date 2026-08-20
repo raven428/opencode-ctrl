@@ -11,6 +11,7 @@
 - `007-unarchive-sessions` – add support for unarchiving sessions
 - `008-user-message-markdown` – render user messages as markdown instead of plain pre-wrap text
 - `009-timestamp-24h` – show message timestamps in 24h format with ISO-like date
+- `010-timeout-continue` – auto recover session after timeout error
 
 ## List of issues
 
