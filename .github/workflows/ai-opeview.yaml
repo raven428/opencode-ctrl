@@ -1,0 +1,50 @@
+---
+name: AI Opeview
+on:
+  # checkov:skip=CKV_GHA_7: dispatch only pipeline
+  workflow_dispatch:
+    inputs:
+      llm-api-model:
+        description: "custom model"
+        type: string
+      llm-api-url:
+        description: "custom API url"
+        type: string
+      llm-api-token:
+        description: "custom API token"
+        type: string
+      pr-number:
+        description: "pull request number (resolved from branch if empty)"
+        type: string
+# jscpd:ignore-start
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          persist-credentials: false
+      - name: Run AI review
+        # jscpd:ignore-end
+        uses: megalomania428/github-actions/review-opencode@master
+        with:
+          # jscpd:ignore-start
+          llm_api_url: ${{ inputs.llm-api-url || secrets.LLM_API_URL }}
+          llm_api_model: ${{ inputs.llm-api-model || secrets.LLM_API_MODEL ||
+            'co-reviewer' }}
+          llm_api_key: "${{ inputs.llm-api-token ||
+            !inputs.llm-api-url && secrets.LLM_API_KEY || 'dummy' }}"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # jscpd:ignore-end
+          search_mcp_url: ${{ secrets.SEARCH_MCP_URL }}
+          search_mcp_key: ${{ secrets.SEARCH_MCP_KEY }}
+          fetch_mcp_url: ${{ secrets.FETCH_MCP_URL }}
+          fetch_mcp_key: ${{ secrets.FETCH_MCP_KEY }}
+          pr_number: ${{ inputs.pr-number }}
