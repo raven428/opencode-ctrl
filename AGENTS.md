@@ -1,7 +1,6 @@
 # Контекст репозитория
 
-Этот репо – набор патчей и скриптов для сборки форка [opencode](https://github.com/anomalyco/opencode).
-Оригинальный исходный код opencode доступен локально в `/workspace/github/opencode`.
+Этот репо – набор патчей и скриптов для сборки форка [opencode](https://github.com/anomalyco/opencode). Оригинальный исходный код opencode доступен локально в `/workspace/github/opencode`.
 
 ## Структура
 
@@ -15,18 +14,16 @@
 
 1. GitHub Actions клонирует opencode по тегу `OPENCODE_VERSION`
 2. Применяет патчи через `scripts/patch.sh`
-3. Собирает CLI (`scripts/build-cli.sh`) и desktop-приложение (`scripts/build-desktop.sh`)
+3. Собирает CLI (`scripts/build-cli.sh`) и desktop-приложение (`scripts/build-desktop.sh`): desktop с v1.15 – это Electron (electron-vite + electron-builder), CLI-ядро встраивается как node-бандл через `packages/desktop/scripts/prepare.ts`; linux – AppImage/deb/rpm, windows – NSIS-инсталлятор, кросс-сборка на Ubuntu через wine
 4. Загружает артефакты как GitHub Release (черновик для веток, настоящий релиз для тегов)
 
 ## Патчи
 
-Каждый `.diff` в `patches/common/` – это `git diff` относительно оригинального репо opencode.
-Применяются через `patch -p1`. Порядок применения – алфавитный (по имени файла).
+Каждый `.diff` в `patches/common/` – это `git diff` относительно оригинального репо opencode. Применяются через `patch -p1`. Порядок применения – алфавитный (по имени файла).
 
 Текущие патчи в `patches/common/`:
 
 - `001-ctrl-enter` – отправка сообщений по `Ctrl-Enter` вместо `Enter` в WebUI и Desktop
-- `002-local-webui` – `opencode web` открывает локальный WebUI вместо `app.opencode.ai`
 - `003-markdown-code-scrollbar` – горизонтальный скроллбар в блоках кода вместо обрезки
 - `004-retry-overload-cap` – ограничение задержки retry при overload до 11s, certificate errors как retryable
 - `005-server-message-id` – исправление дублирования ответа модели при рассинхроне часов
@@ -49,14 +46,6 @@
 
 ### Проверка патча после ручной правки
 
-Не пересчитывать номера строк в заголовках `@@ ... @@` вручную построчно – это источник ошибок.
-Вместо этого проверять применение патча к одноразовой копии оригинала:
+Не пересчитывать номера строк в заголовках `@@ ... @@` вручную построчно – это источник ошибок. Вместо этого проверять применение `patch -p1` к оригиналу после `reset --hard HEAD` или, если почему-то понадобилось его сохранить, к его `git worktree`
 
-```bash
-rm -rf /tmp/patch-verify && cp -r /workspace/github/opencode /tmp/patch-verify
-patch -d /tmp/patch-verify -p1 --dry-run < patches/common/NNN-name.diff
-```
-
-Если нужно поправить заголовок ханка после ручного редактирования содержимого – генерировать его
-не вручную, а через реальный `diff`/`git diff` между чистым оригиналом и отредактированной копией,
-и переносить итоговые ханки в патч.
+Если нужно поправить заголовок ханка после ручного редактирования содержимого – генерировать его не вручную, а через реальный `diff` (без всяких `git diff`) между чистым оригиналом и отредактированной копией, и переносить итоговые ханки в патч.
