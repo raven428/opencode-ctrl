@@ -1,11 +1,11 @@
 diff --git a/packages/ui/src/components/markdown.css b/packages/ui/src/components/markdown.css
-index 1fe11a7de..752059aa9 100644
+index 26c9efd475..21df1009d6 100644
 --- a/packages/ui/src/components/markdown.css
 +++ b/packages/ui/src/components/markdown.css
-@@ -197,11 +197,20 @@
+@@ -203,11 +203,20 @@
    pre {
-     margin-top: 2rem;
-     margin-bottom: 2rem;
+     margin-top: 12px;
+     margin-bottom: 32px;
 -    overflow: auto;
 +    overflow-x: auto;
 +    overflow-y: hidden;
@@ -27,10 +27,10 @@ index 1fe11a7de..752059aa9 100644
    }
  
 diff --git a/packages/ui/src/components/message-part.css b/packages/ui/src/components/message-part.css
-index 3eee45c75..3ba5e6b56 100644
+index 78d574d8a1..a6fd9c2c6c 100644
 --- a/packages/ui/src/components/message-part.css
 +++ b/packages/ui/src/components/message-part.css
-@@ -372,11 +372,19 @@
+@@ -342,11 +342,19 @@
      height: auto;
      max-height: 240px;
      overflow-y: auto;
@@ -52,7 +52,7 @@ index 3eee45c75..3ba5e6b56 100644
      }
  
      [data-component="markdown"] {
-@@ -423,9 +431,17 @@
+@@ -393,9 +401,17 @@
      overflow-x: hidden;
      max-height: 240px;
  
