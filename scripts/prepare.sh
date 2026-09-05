@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Run on every build job (not cached).
 # Installs system packages and configures the environment that can't live in
-# ~/.cargo / ~/.bun / ~/.rustup (apt packages, /usr/local/bin symlinks).
+# ~/.cargo / ~/.bun / ~/.rustup / ~/.cache (apt packages).
 
 export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
 
@@ -12,39 +12,24 @@ if ! command -v bun &>/dev/null; then
   curl -fsSL https://bun.sh/install | bash
 fi
 
-# System deps for Tauri builds (Windows cross-compilation + Linux native)
+# System deps for electron-builder:
+# - rpm is required to build .rpm packages on Ubuntu
+# - wine is required to cross-build the Windows NSIS installer on Ubuntu
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
   curl \
   git \
   unzip \
   zip \
-  nsis \
-  llvm \
-  lld \
-  clang \
-  libssl-dev \
-  pkg-config \
   ca-certificates \
-  libwebkit2gtk-4.1-dev \
-  libgtk-3-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev \
-  libdbus-1-dev \
-  libglib2.0-dev \
-  patchelf \
-  dpkg \
-  dpkg-dev \
-  fakeroot
+  rpm
 
-# cargo-xwin and cc-rs look for unversioned llvm-lib / clang-cl / lld-link.
-# On Ubuntu the binaries have a version suffix (e.g. llvm-lib-14).
-# Create unversioned symlinks in /usr/local/bin (takes priority over /usr/bin).
-for tool in llvm-lib clang-cl lld-link; do
-  if ! command -v "$tool" &>/dev/null; then
-    versioned="$(ls /usr/bin/${tool}-* 2>/dev/null | sort -V | tail -1)"
-    if [[ -n "$versioned" ]]; then
-      sudo ln -sfv "$versioned" "/usr/local/bin/$tool"
-    fi
-  fi
-done
+if [[ "${TARGET_OS:-}" == "windows" ]]; then
+  # electron-builder ships winCodeSign with rcedit-ia32.exe (32-bit PE); wine
+  # must have i386/wow64 support or that step fails with "wine32 is missing".
+  # `wine` on Ubuntu 24.04 is 64-bit only by default, so enable i386 multiarch
+  # and pull the 32-bit runtime explicitly.
+  sudo dpkg --add-architecture i386
+  sudo apt-get update -qq
+  sudo apt-get install -y --no-install-recommends wine wine32:i386
+fi

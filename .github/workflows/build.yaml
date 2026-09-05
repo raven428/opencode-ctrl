@@ -15,8 +15,10 @@ env:
   CACHE_PATH: |
     ~/.cargo
     ~/.rustup
+    ~/.cache/electron
+    ~/.cache/electron-builder
     /tmp/opencode/packages/desktop
-  OPENCODE_VERSION: v1.2.16
+  OPENCODE_VERSION: v1.15.13
 jobs:
   cache-cargo-bun:
     name: warm dependencies cache
@@ -66,21 +68,23 @@ jobs:
         id: restore-cache
         with:
           path: ${{ env.CACHE_PATH }}
-          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
+          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh',
+            'patches/common/**', format('patches/{0}/**', matrix.target)) }}-${{
+            matrix.target }}-${{ env.OPENCODE_VERSION }}"
           restore-keys: "setup-${{ hashFiles('scripts/cache-cargo-bun.sh') }}"
       - name: prepare and build
         run: |
           bash scripts/prepare.sh
           bash scripts/build-cli.sh "$REPO" "$DIST"
-          bash scripts/build-desktop.sh "$REPO" "$DIST" "$DIST"
+          bash scripts/build-desktop.sh "$REPO" "$DIST"
       - name: save cache
         uses: actions/cache/save@v4
         if: steps.restore-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CACHE_PATH }}
-          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh')
-            }}-${{ matrix.target }}-${{ env.OPENCODE_VERSION }}"
+          key: "setup-${{ hashFiles('scripts/build-cli.sh', 'scripts/build-desktop.sh',
+            'patches/common/**', format('patches/{0}/**', matrix.target)) }}-${{
+            matrix.target }}-${{ env.OPENCODE_VERSION }}"
       - name: upload release artifacts
         uses: ncipollo/release-action@v1
         with:

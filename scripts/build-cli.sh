@@ -16,6 +16,14 @@ sudo ln -sfv /usr/local/node_modules/husky/bin.js /usr/local/bin/husky
 
 # Install workspace deps
 bun install --production --cwd "$REPO_DIR"
+# `vite` and other devDeps of packages/app are needed to build the embedded
+# WebUI bundle (createEmbeddedWebUIBundle in packages/opencode/script/build.ts),
+# so pull them separately without --production.
+bun install --cwd "$REPO_DIR/packages/app"
+# Fallback if the app-only install above stops covering everything the build
+# needs (e.g. workspace hoisting quirks) – drop --production from the main
+# install instead:
+# bun install --cwd "$REPO_DIR"
 
 # Build CLI targets
 bun run --cwd "$REPO_DIR/packages/opencode" script/build.ts
