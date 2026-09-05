@@ -1,44 +1,37 @@
-diff --git a/packages/ui/src/components/message-part.tsx b/packages/ui/src/components/message-part.tsx
-index a97b38671..a2896dc38 100644
 --- a/packages/ui/src/components/message-part.tsx
 +++ b/packages/ui/src/components/message-part.tsx
-@@ -427,6 +427,12 @@ function partDefaultOpen(part: PartType, shell = false, edit = false) {
-   return toolDefaultOpen(part.tool, shell, edit)
+@@ -614,6 +614,12 @@
+   return !!PART_MAPPING[part.type]
  }
  
-+function formatTimestamp(created: number): string {
-+  const d = new Date(created)
-+  const p = (n: number) => String(n).padStart(2, "0")
-+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
++function formatTimestamp(value: number): string {
++  const date = new Date(value)
++  const pad = (part: number) => String(part).padStart(2, "0")
++  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 +}
 +
- export function AssistantParts(props: {
-   messages: AssistantMessage[]
-   showAssistantCopyPartID?: string | null
-@@ -847,11 +853,7 @@ export function UserMessageDisplay(props: {
+ function toolDefaultOpen(tool: string, shell = false, edit = false) {
+   if (tool === "bash") return shell
+   if (tool === "edit" || tool === "write" || tool === "apply_patch") return edit
+@@ -1068,12 +1074,10 @@
+     const match = data.store.provider?.all?.get(providerID)
+     return match?.models?.[modelID]?.name ?? modelID
+   })
+-  const timefmt = createMemo(() => new Intl.DateTimeFormat(i18n.locale(), { timeStyle: "short" }))
+-
    const stamp = createMemo(() => {
      const created = props.message.time?.created
      if (typeof created !== "number") return ""
--    const date = new Date(created)
--    const hours = date.getHours()
--    const hour12 = hours % 12 || 12
--    const minute = String(date.getMinutes()).padStart(2, "0")
--    return `${hour12}:${minute} ${hours < 12 ? "AM" : "PM"}`
+-    return timefmt().format(created)
 +    return formatTimestamp(created)
    })
  
    const metaHead = createMemo(() => {
-@@ -1222,10 +1224,13 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
-   const meta = createMemo(() => {
-     if (props.message.role !== "assistant") return ""
-     const agent = (props.message as AssistantMessage).agent
-+    const msg = props.message as AssistantMessage
-+    const created = msg.time?.created
-     const items = [
+@@ -1466,6 +1470,7 @@
        agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
        model(),
        duration(),
-+      typeof created === "number" ? formatTimestamp(created) : "",
++      formatTimestamp((props.message as AssistantMessage).time.created),
        interrupted() ? i18n.t("ui.message.interrupted") : "",
      ]
      return items.filter((x) => !!x).join(" \u00B7 ")
