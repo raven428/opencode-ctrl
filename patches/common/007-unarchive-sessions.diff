@@ -84,8 +84,8 @@ index 0000000000..f3e470f512
 +      if (session.time?.archived != null) collected.push(session)
 +    }
 +    const next = result.response?.headers.get("x-next-cursor")
-+    if (!next) break
-+    const parsed = Number(next)
++    if (!next && page.length < ARCHIVE_PAGE_SIZE) break
++    const parsed = Number(next ?? page[page.length - 1]?.time.updated)
 +    if (!Number.isFinite(parsed) || parsed === cursor) break
 +    cursor = parsed
 +  }
@@ -597,6 +597,26 @@ index ac41487fd3..e80150cea3 100644
      }),
    ),
  })
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
+index 4061bec298..4169bb0ac8 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
+@@ -140,10 +140,12 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
+       )
+       const list = sessions.length > limit ? sessions.slice(0, limit) : sessions
+       return HttpServerResponse.jsonUnsafe(list, {
+-        headers:
+-          sessions.length > limit && list.length > 0
++        headers: {
++          "Access-Control-Expose-Headers": "X-Next-Cursor",
++          ...(sessions.length > limit && list.length > 0
+             ? { "x-next-cursor": String(list[list.length - 1].time.updated) }
+-            : undefined,
++            : {}),
++        },
+       })
+     })
+
 diff --git a/packages/opencode/src/session/session.ts b/packages/opencode/src/session/session.ts
 index e84da3340c..97b16a5bd6 100644
 --- a/packages/opencode/src/session/session.ts
