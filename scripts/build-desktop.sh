@@ -11,14 +11,11 @@ DESKTOP_DIR="$REPO_DIR/packages/desktop"
 # prepare.ts writes Script.version into package.json; electron-builder and the
 # deb/rpm packagers expect plain semver without the leading "v" of the git tag.
 export OPENCODE_CHANNEL="${OPENCODE_CHANNEL:-prod}"
+VERSION="${OPENCODE_VERSION:-local}"
+VER="${VERSION//./_}"
 if [[ -n "${OPENCODE_VERSION:-}" ]]; then
   export OPENCODE_VERSION="${OPENCODE_VERSION#v}"
 fi
-
-# Keep the same "vX_Y_Z" tag in artifact names as build-cli.sh emits, so the
-# release page lists desktop and CLI files together per version.
-VERSION="${OPENCODE_VERSION:-local}"
-VER="${VERSION//./_}"
 
 # CLI node bundle is wired by electron-vite itself (virtual:opencode-server)
 # and rebuilt from source by prepare.ts below; no prebuilt CLI binary from
@@ -51,11 +48,11 @@ if [[ "$TARGET_OS" == "linux" ]]; then
   # electron-builder names files as opencode-desktop-linux-{arch}.{ext};
   # copy under explicit names carrying the "vX_Y_Z" tag, matching build-cli.sh.
   cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-x86_64.AppImage" \
-    "$OUT_DIR/opencode-desktop-v${VER}-linux-x86_64.AppImage"
+    "$OUT_DIR/opencode-desktop-${VER}-linux-x86_64.AppImage"
   cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-amd64.deb" \
-    "$OUT_DIR/opencode-desktop-v${VER}-linux-amd64.deb"
+    "$OUT_DIR/opencode-desktop-${VER}-linux-amd64.deb"
   cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-x86_64.rpm" \
-    "$OUT_DIR/opencode-desktop-v${VER}-linux-x86_64.rpm"
+    "$OUT_DIR/opencode-desktop-${VER}-linux-x86_64.rpm"
 elif [[ "$TARGET_OS" == "windows" ]]; then
   # Cross-build on Ubuntu: NSIS target needs wine, nothing else
   export RUST_TARGET='x86_64-pc-windows-msvc'
@@ -66,7 +63,7 @@ elif [[ "$TARGET_OS" == "windows" ]]; then
   # electron-builder's ${os} placeholder resolves to "win" for Windows,
   # unlike "linux" above which matches our own naming already.
   cp -v "$DESKTOP_DIR/dist/opencode-desktop-win-x64.exe" \
-    "$OUT_DIR/opencode-desktop-v${VER}-windows-x64.exe"
+    "$OUT_DIR/opencode-desktop-${VER}-windows-x64.exe"
 else
   echo "unsupported TARGET_OS: $TARGET_OS" >&2
   exit 1

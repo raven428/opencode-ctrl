@@ -6,9 +6,12 @@ export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
 REPO_DIR="${1:?usage: build-cli.sh <repo-dir> <out-dir> <os>}"
 OUT_DIR="${2:-/tmp/opencode-dist}"
 
-echo "${OPENCODE_VERSION:-local}"
+echo "build [${OPENCODE_VERSION:-local}] version"
 VERSION="${OPENCODE_VERSION:-local}"
 VER="${VERSION//./_}"
+if [[ -n "${OPENCODE_VERSION:-}" ]]; then
+  export OPENCODE_VERSION="${OPENCODE_VERSION#v}"
+fi
 
 # Install husky globally
 sudo "$HOME/.bun/bin/bun" install --production --cwd /usr/local husky
