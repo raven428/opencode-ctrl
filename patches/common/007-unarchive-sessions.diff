@@ -42,7 +42,7 @@ new file mode 100644
 index 0000000000..f3e470f512
 --- /dev/null
 +++ b/packages/app/src/components/settings-archive.tsx
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,221 @@
 +import { Button } from "@opencode-ai/ui/button"
 +import { Icon } from "@opencode-ai/ui/icon"
 +import { RadioGroup } from "@opencode-ai/ui/radio-group"
@@ -53,10 +53,9 @@ index 0000000000..f3e470f512
 +import { useServerSDK } from "@/context/server-sdk"
 +import { useServerSync } from "@/context/server-sync"
 +import { useLanguage } from "@/context/language"
-+import { useLayout } from "@/context/layout"
 +import { getRelativeTime } from "@/utils/time"
 +import { decode64 } from "@/utils/base64"
-+import type { Session } from "@opencode-ai/sdk/v2/client"
++import type { GlobalSession, OpencodeClient, Project } from "@opencode-ai/sdk/v2/client"
 +import { SessionSkeleton } from "@/pages/layout/sidebar-items"
 +
 +type FilterScope = "all" | "current"
@@ -68,16 +67,40 @@ index 0000000000..f3e470f512
 +  { value: "current", label: "settings.archive.scope.current" },
 +]
 +
++const ARCHIVE_PAGE_SIZE = 500
++const ARCHIVE_MAX_TOTAL = 100_000
++
++async function loadAllArchived(client: OpencodeClient): Promise<GlobalSession[]> {
++  const collected: GlobalSession[] = []
++  let cursor: number | undefined
++  while (collected.length < ARCHIVE_MAX_TOTAL) {
++    const result = await client.experimental.session.list({
++      archived: true,
++      limit: ARCHIVE_PAGE_SIZE,
++      cursor,
++    })
++    const page = result.data ?? []
++    for (const session of page) {
++      if (session.time?.archived != null) collected.push(session)
++    }
++    const next = result.response?.headers.get("x-next-cursor")
++    if (!next) break
++    const parsed = Number(next)
++    if (!Number.isFinite(parsed) || parsed === cursor) break
++    cursor = parsed
++  }
++  collected.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
++  return collected
++}
++
 +export const SettingsArchive: Component = () => {
 +  const language = useLanguage()
 +  const serverSDK = useServerSDK()
 +  const serverSync = useServerSync()
-+  const layout = useLayout()
 +  const params = useParams()
 +  const [removedIds, setRemovedIds] = createSignal<Set<string>>(new Set())
 +
-+  const projects = createMemo(() => serverSync.data.project)
-+  const layoutProjects = createMemo(() => layout.projects.list())
++  const projects = createMemo(() => serverSync.data.project as Project[])
 +  const hasMultipleProjects = createMemo(() => projects().length > 1)
 +  const homedir = createMemo(() => serverSync.data.path.home)
 +
@@ -89,17 +112,10 @@ index 0000000000..f3e470f512
 +  const currentProject = createMemo(() => {
 +    const dir = currentDirectory()
 +    if (!dir) return null
-+    return layoutProjects().find((p) => p.worktree === dir || p.sandboxes?.includes(dir)) ?? null
++    return projects().find((p) => p.worktree === dir || (p.sandboxes ?? []).includes(dir)) ?? null
 +  })
 +
-+  const filteredProjects = createMemo(() => {
-+    if (filterScope() === "current" && currentProject()) {
-+      return [currentProject()!]
-+    }
-+    return layoutProjects()
-+  })
-+
-+  const getSessionLabel = (session: Session) => {
++  const getSessionLabel = (session: GlobalSession) => {
 +    const directory = session.directory
 +    const home = homedir()
 +    const path = home ? directory.replace(home, "~") : directory
@@ -119,34 +135,37 @@ index 0000000000..f3e470f512
 +  }
 +
 +  const [archivedSessions] = createResource(
-+    () => ({ scope: filterScope(), projects: filteredProjects() }),
-+    async ({ projects }) => {
-+      const directories = projects.flatMap((project) => [
-+        project.worktree,
-+        ...(project.sandboxes ?? []),
-+      ])
-+      const results = await Promise.all(
-+        directories.map((directory) =>
-+          serverSDK.client.experimental.session.list({ directory, archived: true }),
-+        ),
-+      )
-+      const allSessions = results
-+        .flatMap((result) => result.data ?? [])
-+        .filter((s) => s.time?.archived != null)
-+      return allSessions.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
++    async () => {
++      try {
++        return await loadAllArchived(serverSDK.client)
++      } catch (err) {
++        showToast({
++          variant: "error",
++          title: language.t("common.requestFailed"),
++          description: err instanceof Error ? err.message : String(err),
++        })
++        return [] as GlobalSession[]
++      }
 +    },
-+    { initialValue: [] },
++    { initialValue: [] as GlobalSession[] },
 +  )
 +
 +  const displayedSessions = () => {
 +    const sessions = archivedSessions() ?? []
 +    const removed = removedIds()
-+    return sessions.filter((s) => !removed.has(s.id))
++    const filtered = (() => {
++      if (filterScope() !== "current") return sessions
++      const current = currentProject()
++      if (!current) return sessions
++      const dirs = new Set<string>([current.worktree, ...(current.sandboxes ?? [])])
++      return sessions.filter((session) => dirs.has(session.directory))
++    })()
++    return filtered.filter((session) => !removed.has(session.id))
 +  }
 +
 +  const currentScopeOption = () => scopeOptions.find((o) => o.value === filterScope())
 +
-+  const unarchiveSession = async (session: Session) => {
++  const unarchiveSession = async (session: GlobalSession) => {
 +    setRemovedIds((prev) => new Set(prev).add(session.id))
 +    try {
 +      await serverSDK.client.session.update({
@@ -161,8 +180,8 @@ index 0000000000..f3e470f512
 +        return next
 +      })
 +      showToast({
-+        variant: 'error',
-+        title: language.t('common.requestFailed'),
++        variant: "error",
++        title: language.t("common.requestFailed"),
 +        description: err instanceof Error ? err.message : String(err),
 +      })
 +    }
@@ -170,7 +189,6 @@ index 0000000000..f3e470f512
 +
 +  const handleScopeChange = (option: ScopeOption | undefined) => {
 +    if (!option) return
-+    setRemovedIds(new Set<string>())
 +    setFilterScope(option.value)
 +  }
 +
