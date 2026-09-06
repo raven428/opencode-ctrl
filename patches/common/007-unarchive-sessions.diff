@@ -1,71 +1,61 @@
-diff --git a/packages/sdk/js/src/v2/gen/sdk.gen.ts b/packages/sdk/js/src/v2/gen/sdk.gen.ts
---- a/packages/sdk/js/src/v2/gen/sdk.gen.ts
-+++ b/packages/sdk/js/src/v2/gen/sdk.gen.ts
-@@ -1400,7 +1400,7 @@ export class Session2 extends HeyApiClient {
-       workspace?: string
-       title?: string
-       time?: {
--        archived?: number
-+        archived?: number | null
-       }
-     },
-     options?: Options<never, ThrowOnError>,
-diff --git a/packages/sdk/js/src/v2/gen/types.gen.ts b/packages/sdk/js/src/v2/gen/types.gen.ts
---- a/packages/sdk/js/src/v2/gen/types.gen.ts
-+++ b/packages/sdk/js/src/v2/gen/types.gen.ts
-@@ -2877,7 +2877,7 @@ export type SessionUpdateData = {
-   body?: {
-     title?: string
-     time?: {
--      archived?: number
-+      archived?: number | null
-     }
-   }
-   path: {
-diff --git a/packages/opencode/src/session/index.ts b/packages/opencode/src/session/index.ts
---- a/packages/opencode/src/session/index.ts
-+++ b/packages/opencode/src/session/index.ts
-@@ -395,7 +395,7 @@ export namespace Session {
-   export const setArchived = fn(
-     z.object({
-       sessionID: Identifier.schema("session"),
--      time: z.number().optional(),
-+      time: z.number().nullable().optional(),
-     }),
-     async (input) => {
-       return Database.use((db) => {
-diff --git a/packages/opencode/src/server/routes/session.ts b/packages/opencode/src/server/routes/session.ts
---- a/packages/opencode/src/server/routes/session.ts
-+++ b/packages/opencode/src/server/routes/session.ts
-@@ -269,7 +269,7 @@ export const sessionRouter = new Hono()
-           title: z.string().optional(),
-           time: z
-             .object({
--              archived: z.number().optional(),
-+              archived: z.number().nullable().optional(),
-             })
-             .optional(),
-         }),
+diff --git a/packages/app/src/components/dialog-settings.tsx b/packages/app/src/components/dialog-settings.tsx
+index 83cea131f5..f63e2c339a 100644
+--- a/packages/app/src/components/dialog-settings.tsx
++++ b/packages/app/src/components/dialog-settings.tsx
+@@ -8,6 +8,7 @@ import { SettingsGeneral } from "./settings-general"
+ import { SettingsKeybinds } from "./settings-keybinds"
+ import { SettingsProviders } from "./settings-providers"
+ import { SettingsModels } from "./settings-models"
++import { SettingsArchive } from "./settings-archive"
+ 
+ export const DialogSettings: Component = () => {
+   const language = useLanguage()
+@@ -47,6 +48,16 @@ export const DialogSettings: Component = () => {
+                     </Tabs.Trigger>
+                   </div>
+                 </div>
++
++                <div class="flex flex-col gap-1.5">
++                  <Tabs.SectionTitle>{language.t("settings.section.data")}</Tabs.SectionTitle>
++                  <div class="flex flex-col gap-1.5 w-full">
++                    <Tabs.Trigger value="archive">
++                      <Icon name="archive" />
++                      {language.t("settings.archive.title")}
++                    </Tabs.Trigger>
++                  </div>
++                </div>
+               </div>
+             </div>
+             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
+@@ -67,6 +78,9 @@ export const DialogSettings: Component = () => {
+         <Tabs.Content value="models" class="no-scrollbar">
+           <SettingsModels />
+         </Tabs.Content>
++        <Tabs.Content value="archive" class="no-scrollbar">
++          <SettingsArchive />
++        </Tabs.Content>
+       </Tabs>
+     </Dialog>
+   )
 diff --git a/packages/app/src/components/settings-archive.tsx b/packages/app/src/components/settings-archive.tsx
 new file mode 100644
-index 000000000..ab9ea0a82
+index 0000000000..f3e470f512
 --- /dev/null
 +++ b/packages/app/src/components/settings-archive.tsx
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,221 @@
 +import { Button } from "@opencode-ai/ui/button"
 +import { Icon } from "@opencode-ai/ui/icon"
 +import { RadioGroup } from "@opencode-ai/ui/radio-group"
 +import { showToast } from "@opencode-ai/ui/toast"
-+import { getFilename } from "@opencode-ai/util/path"
++import { getFilename } from "@opencode-ai/core/util/path"
 +import { Component, For, Show, createMemo, createResource, createSignal } from "solid-js"
 +import { useParams } from "@solidjs/router"
-+import { useGlobalSDK } from "@/context/global-sdk"
-+import { useGlobalSync } from "@/context/global-sync"
++import { useServerSDK } from "@/context/server-sdk"
++import { useServerSync } from "@/context/server-sync"
 +import { useLanguage } from "@/context/language"
-+import { useLayout } from "@/context/layout"
 +import { getRelativeTime } from "@/utils/time"
 +import { decode64 } from "@/utils/base64"
-+import type { Session } from "@opencode-ai/sdk/v2/client"
++import type { GlobalSession, OpencodeClient, Project } from "@opencode-ai/sdk/v2/client"
 +import { SessionSkeleton } from "@/pages/layout/sidebar-items"
 +
 +type FilterScope = "all" | "current"
@@ -77,18 +67,42 @@ index 000000000..ab9ea0a82
 +  { value: "current", label: "settings.archive.scope.current" },
 +]
 +
++const ARCHIVE_PAGE_SIZE = 500
++const ARCHIVE_MAX_TOTAL = 100_000
++
++async function loadAllArchived(client: OpencodeClient): Promise<GlobalSession[]> {
++  const collected: GlobalSession[] = []
++  let cursor: number | undefined
++  while (collected.length < ARCHIVE_MAX_TOTAL) {
++    const result = await client.experimental.session.list({
++      archived: true,
++      limit: ARCHIVE_PAGE_SIZE,
++      cursor,
++    })
++    const page = result.data ?? []
++    for (const session of page) {
++      if (session.time?.archived != null) collected.push(session)
++    }
++    const next = result.response?.headers.get("x-next-cursor")
++    if (!next && page.length < ARCHIVE_PAGE_SIZE) break
++    const parsed = Number(next ?? page[page.length - 1]?.time.updated)
++    if (!Number.isFinite(parsed) || parsed === cursor) break
++    cursor = parsed
++  }
++  collected.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
++  return collected
++}
++
 +export const SettingsArchive: Component = () => {
 +  const language = useLanguage()
-+  const globalSDK = useGlobalSDK()
-+  const globalSync = useGlobalSync()
-+  const layout = useLayout()
++  const serverSDK = useServerSDK()
++  const serverSync = useServerSync()
 +  const params = useParams()
 +  const [removedIds, setRemovedIds] = createSignal<Set<string>>(new Set())
 +
-+  const projects = createMemo(() => globalSync.data.project)
-+  const layoutProjects = createMemo(() => layout.projects.list())
++  const projects = createMemo(() => serverSync.data.project as Project[])
 +  const hasMultipleProjects = createMemo(() => projects().length > 1)
-+  const homedir = createMemo(() => globalSync.data.path.home)
++  const homedir = createMemo(() => serverSync.data.path.home)
 +
 +  const defaultScope = () => (hasMultipleProjects() ? "current" : "all")
 +  const [filterScope, setFilterScope] = createSignal<FilterScope>(defaultScope())
@@ -98,17 +112,10 @@ index 000000000..ab9ea0a82
 +  const currentProject = createMemo(() => {
 +    const dir = currentDirectory()
 +    if (!dir) return null
-+    return layoutProjects().find((p) => p.worktree === dir || p.sandboxes?.includes(dir)) ?? null
++    return projects().find((p) => p.worktree === dir || (p.sandboxes ?? []).includes(dir)) ?? null
 +  })
 +
-+  const filteredProjects = createMemo(() => {
-+    if (filterScope() === "current" && currentProject()) {
-+      return [currentProject()!]
-+    }
-+    return layoutProjects()
-+  })
-+
-+  const getSessionLabel = (session: Session) => {
++  const getSessionLabel = (session: GlobalSession) => {
 +    const directory = session.directory
 +    const home = homedir()
 +    const path = home ? directory.replace(home, "~") : directory
@@ -119,7 +126,7 @@ index 000000000..ab9ea0a82
 +        current && directory === current.worktree
 +          ? language.t("workspace.type.local")
 +          : language.t("workspace.type.sandbox")
-+      const [store] = globalSync.child(directory, { bootstrap: false })
++      const [store] = serverSync.child(directory, { bootstrap: false })
 +      const name = store.vcs?.branch ?? getFilename(directory)
 +      return `${kind} : ${name || path}`
 +    }
@@ -128,37 +135,40 @@ index 000000000..ab9ea0a82
 +  }
 +
 +  const [archivedSessions] = createResource(
-+    () => ({ scope: filterScope(), projects: filteredProjects() }),
-+    async ({ projects }) => {
-+      const directories = projects.flatMap((project) => [
-+        project.worktree,
-+        ...(project.sandboxes ?? []),
-+      ])
-+      const results = await Promise.all(
-+        directories.map((directory) =>
-+          globalSDK.client.experimental.session.list({ directory, archived: true }),
-+        ),
-+      )
-+      const allSessions = results
-+        .flatMap((result) => result.data ?? [])
-+        .filter((s) => s.time?.archived != null)
-+      return allSessions.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
++    async () => {
++      try {
++        return await loadAllArchived(serverSDK.client)
++      } catch (err) {
++        showToast({
++          variant: "error",
++          title: language.t("common.requestFailed"),
++          description: err instanceof Error ? err.message : String(err),
++        })
++        return [] as GlobalSession[]
++      }
 +    },
-+    { initialValue: [] },
++    { initialValue: [] as GlobalSession[] },
 +  )
 +
 +  const displayedSessions = () => {
 +    const sessions = archivedSessions() ?? []
 +    const removed = removedIds()
-+    return sessions.filter((s) => !removed.has(s.id))
++    const filtered = (() => {
++      if (filterScope() !== "current") return sessions
++      const current = currentProject()
++      if (!current) return sessions
++      const dirs = new Set<string>([current.worktree, ...(current.sandboxes ?? [])])
++      return sessions.filter((session) => dirs.has(session.directory))
++    })()
++    return filtered.filter((session) => !removed.has(session.id))
 +  }
 +
 +  const currentScopeOption = () => scopeOptions.find((o) => o.value === filterScope())
 +
-+  const unarchiveSession = async (session: Session) => {
++  const unarchiveSession = async (session: GlobalSession) => {
 +    setRemovedIds((prev) => new Set(prev).add(session.id))
 +    try {
-+      await globalSDK.client.session.update({
++      await serverSDK.client.session.update({
 +        directory: session.directory,
 +        sessionID: session.id,
 +        time: { archived: null },
@@ -170,8 +180,8 @@ index 000000000..ab9ea0a82
 +        return next
 +      })
 +      showToast({
-+        variant: 'error',
-+        title: language.t('common.requestFailed'),
++        variant: "error",
++        title: language.t("common.requestFailed"),
 +        description: err instanceof Error ? err.message : String(err),
 +      })
 +    }
@@ -179,7 +189,6 @@ index 000000000..ab9ea0a82
 +
 +  const handleScopeChange = (option: ScopeOption | undefined) => {
 +    if (!option) return
-+    setRemovedIds(new Set<string>())
 +    setFilterScope(option.value)
 +  }
 +
@@ -255,80 +264,14 @@ index 000000000..ab9ea0a82
 +    </div>
 +  )
 +}
-diff --git a/packages/app/src/components/dialog-settings.tsx b/packages/app/src/components/dialog-settings.tsx
---- a/packages/app/src/components/dialog-settings.tsx
-+++ b/packages/app/src/components/dialog-settings.tsx
-@@ -8,6 +8,7 @@ import { Component } from "solid-js"
- import { SettingsKeybinds } from "./settings-keybinds"
- import { SettingsProviders } from "./settings-providers"
- import { SettingsModels } from "./settings-models"
-+import { SettingsArchive } from "./settings-archive"
- 
- export const DialogSettings: Component = () => {
-   const language = useLanguage()
-@@ -47,6 +48,16 @@ export const DialogSettings: Component = () => {
-                     </Tabs.Trigger>
-                   </div>
-                 </div>
-+
-+                <div class="flex flex-col gap-1.5">
-+                  <Tabs.SectionTitle>{language.t("settings.section.data")}</Tabs.SectionTitle>
-+                  <div class="flex flex-col gap-1.5 w-full">
-+                    <Tabs.Trigger value="archive">
-+                      <Icon name="archive" />
-+                      {language.t("settings.archive.title")}
-+                    </Tabs.Trigger>
-+                  </div>
-+                </div>
-               </div>
-             </div>
-             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
-@@ -67,6 +77,9 @@ export const DialogSettings: Component = () => {
-         <Tabs.Content value="models" class="no-scrollbar">
-           <SettingsModels />
-         </Tabs.Content>
-+        <Tabs.Content value="archive" class="no-scrollbar">
-+          <SettingsArchive />
-+        </Tabs.Content>
-       </Tabs>
-     </Dialog>
-   )
-diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
---- a/packages/app/src/i18n/en.ts
-+++ b/packages/app/src/i18n/en.ts
-@@ -585,6 +585,7 @@ export const dict = {
-   "common.rename": "Rename",
-   "common.reset": "Reset",
-   "common.archive": "Archive",
-+  "common.unarchive": "Unarchive",
-   "common.delete": "Delete",
-   "common.close": "Close",
-   "common.edit": "Edit",
-@@ -613,6 +614,7 @@ export const dict = {
- 
-   "settings.section.desktop": "Desktop",
-   "settings.section.server": "Server",
-+  "settings.section.data": "Data",
-   "settings.tab.general": "General",
-   "settings.tab.shortcuts": "Shortcuts",
-   "settings.desktop.section.wsl": "WSL",
-@@ -844,4 +846,10 @@ export const dict = {
-   "workspace.reset.archived.one": "1 session will be archived.",
-   "workspace.reset.archived.many": "{{count}} sessions will be archived.",
-   "workspace.reset.note": "This will reset the workspace to match the default branch.",
-+
-+  "settings.archive.title": "Archived Sessions",
-+  "settings.archive.description": "Restore archived sessions to make them visible in the sidebar.",
-+  "settings.archive.none": "No archived sessions.",
-+  "settings.archive.scope.all": "All projects",
-+  "settings.archive.scope.current": "Current project",
- }
 diff --git a/packages/app/src/i18n/ar.ts b/packages/app/src/i18n/ar.ts
+index 5d124024a3..486b889549 100644
 --- a/packages/app/src/i18n/ar.ts
 +++ b/packages/app/src/i18n/ar.ts
-@@ -749,3 +749,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "متصل من متغيرات البيئة الخاصة بك",
-   "settings.providers.custom.description": "أضف مزود متوافق مع OpenAI بواسطة عنوان URL الأساسي.",
+@@ -844,4 +844,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "فشل إنشاء أيقونة المشروع الدائمة",
+   "error.childStore.storeCreateFailed": "فشل إنشاء المخزن",
+   "terminal.connectionLost.abnormalClose": "تم إغلاق WebSocket بشكل غير طبيعي: {{code}}",
 +
 +  "common.unarchive": "إلغاء الأرشفة",
 +  "settings.section.data": "البيانات",
@@ -339,11 +282,13 @@ diff --git a/packages/app/src/i18n/ar.ts b/packages/app/src/i18n/ar.ts
 +  "settings.archive.scope.current": "المشروع الحالي",
  }
 diff --git a/packages/app/src/i18n/br.ts b/packages/app/src/i18n/br.ts
+index 7c6965e330..9d7b845eae 100644
 --- a/packages/app/src/i18n/br.ts
 +++ b/packages/app/src/i18n/br.ts
-@@ -757,3 +757,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Conectado a partir de suas variáveis de ambiente",
-   "settings.providers.custom.description": "Adicionar um provedor compatível com a OpenAI através do URL base.",
+@@ -857,4 +857,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Falha ao criar ícone de projeto persistente",
+   "error.childStore.storeCreateFailed": "Falha ao criar armazenamento",
+   "terminal.connectionLost.abnormalClose": "WebSocket fechado anormalmente: {{code}}",
 +
 +  "common.unarchive": "Desarquivar",
 +  "settings.section.data": "Dados",
@@ -354,11 +299,13 @@ diff --git a/packages/app/src/i18n/br.ts b/packages/app/src/i18n/br.ts
 +  "settings.archive.scope.current": "Projeto atual",
  }
 diff --git a/packages/app/src/i18n/bs.ts b/packages/app/src/i18n/bs.ts
+index 201b6ed81c..1603faa351 100644
 --- a/packages/app/src/i18n/bs.ts
 +++ b/packages/app/src/i18n/bs.ts
-@@ -834,3 +834,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Povezano sa vašim varijablama okruženja",
-   "settings.providers.custom.description": "Dodajte provajdera kompatibilnog s OpenAI putem osnovnog URL-a.",
+@@ -933,4 +933,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Nije uspjelo kreiranje trajne ikone projekta",
+   "error.childStore.storeCreateFailed": "Nije uspjelo kreiranje skladišta",
+   "terminal.connectionLost.abnormalClose": "WebSocket zatvoren nenormalno: {{code}}",
 +
 +  "common.unarchive": "Vrati iz arhive",
 +  "settings.section.data": "Podaci",
@@ -369,11 +316,13 @@ diff --git a/packages/app/src/i18n/bs.ts b/packages/app/src/i18n/bs.ts
 +  "settings.archive.scope.current": "Trenutni projekt",
  }
 diff --git a/packages/app/src/i18n/da.ts b/packages/app/src/i18n/da.ts
+index d52aca823e..4ec03a2a05 100644
 --- a/packages/app/src/i18n/da.ts
 +++ b/packages/app/src/i18n/da.ts
-@@ -828,3 +828,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Tilsluttet fra dine miljøvariabler",
-   "settings.providers.custom.description": "Tilføj en OpenAI-kompatibel udbyder via basis-URL.",
+@@ -927,4 +927,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Kunne ikke oprette vedvarende projektikon",
+   "error.childStore.storeCreateFailed": "Kunne ikke oprette lager",
+   "terminal.connectionLost.abnormalClose": "WebSocket lukkede unormalt: {{code}}",
 +
 +  "common.unarchive": "Fjern arkivering",
 +  "settings.section.data": "Data",
@@ -384,11 +333,13 @@ diff --git a/packages/app/src/i18n/da.ts b/packages/app/src/i18n/da.ts
 +  "settings.archive.scope.current": "Nuværende projekt",
  }
 diff --git a/packages/app/src/i18n/de.ts b/packages/app/src/i18n/de.ts
+index 4d5a649902..8e93904007 100644
 --- a/packages/app/src/i18n/de.ts
 +++ b/packages/app/src/i18n/de.ts
-@@ -766,3 +766,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Verbunden aus Ihren Umgebungsvariablen",
-   "settings.providers.custom.description": "Fügen Sie einen OpenAI-kompatiblen Anbieter per Basis-URL hinzu.",
+@@ -869,4 +869,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Dauerhaftes Projekticon konnte nicht erstellt werden",
+   "error.childStore.storeCreateFailed": "Speicher konnte nicht erstellt werden",
+   "terminal.connectionLost.abnormalClose": "WebSocket abnormal geschlossen: {{code}}",
 +
 +  "common.unarchive": "Archivierung aufheben",
 +  "settings.section.data": "Daten",
@@ -398,12 +349,45 @@ diff --git a/packages/app/src/i18n/de.ts b/packages/app/src/i18n/de.ts
 +  "settings.archive.scope.all": "Alle Projekte",
 +  "settings.archive.scope.current": "Aktuelles Projekt",
  } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
+index 29f662f732..31f0081ac2 100644
+--- a/packages/app/src/i18n/en.ts
++++ b/packages/app/src/i18n/en.ts
+@@ -662,6 +662,7 @@ export const dict = {
+   "common.rename": "Rename",
+   "common.reset": "Reset",
+   "common.archive": "Archive",
++  "common.unarchive": "Unarchive",
+   "common.delete": "Delete",
+   "common.close": "Close",
+   "common.edit": "Edit",
+@@ -731,6 +732,7 @@ export const dict = {
+ 
+   "settings.section.desktop": "Desktop",
+   "settings.section.server": "Server",
++  "settings.section.data": "Data",
+   "settings.tab.general": "General",
+   "settings.tab.shortcuts": "Shortcuts",
+   "settings.desktop.section.wsl": "WSL",
+@@ -980,4 +982,10 @@ export const dict = {
+   "workspace.reset.archived.one": "1 session will be archived.",
+   "workspace.reset.archived.many": "{{count}} sessions will be archived.",
+   "workspace.reset.note": "This will reset the workspace to match the default branch.",
++
++  "settings.archive.title": "Archived Sessions",
++  "settings.archive.description": "Restore archived sessions to make them visible in the sidebar.",
++  "settings.archive.none": "No archived sessions.",
++  "settings.archive.scope.all": "All projects",
++  "settings.archive.scope.current": "Current project",
+ }
 diff --git a/packages/app/src/i18n/es.ts b/packages/app/src/i18n/es.ts
+index b71fe03e87..6e08bbee31 100644
 --- a/packages/app/src/i18n/es.ts
 +++ b/packages/app/src/i18n/es.ts
-@@ -840,3 +840,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Conectado desde tus variables de entorno",
-   "settings.providers.custom.description": "Añade un proveedor compatible con OpenAI por su URL base.",
+@@ -940,4 +940,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Error al crear icono de proyecto persistente",
+   "error.childStore.storeCreateFailed": "Error al crear almacén",
+   "terminal.connectionLost.abnormalClose": "WebSocket cerrado anormalmente: {{code}}",
 +
 +  "common.unarchive": "Desarchivar",
 +  "settings.section.data": "Datos",
@@ -414,11 +398,13 @@ diff --git a/packages/app/src/i18n/es.ts b/packages/app/src/i18n/es.ts
 +  "settings.archive.scope.current": "Proyecto actual",
  }
 diff --git a/packages/app/src/i18n/fr.ts b/packages/app/src/i18n/fr.ts
+index 385dbdddef..9190eff3d1 100644
 --- a/packages/app/src/i18n/fr.ts
 +++ b/packages/app/src/i18n/fr.ts
-@@ -764,3 +764,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Connecté à partir de vos variables d'environnement",
-   "settings.providers.custom.description": "Ajouter un fournisseur compatible avec OpenAI via l'URL de base.",
+@@ -868,4 +868,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Échec de la création de l'icône de projet persistante",
+   "error.childStore.storeCreateFailed": "Échec de la création du stockage",
+   "terminal.connectionLost.abnormalClose": "WebSocket fermé anormalement : {{code}}",
 +
 +  "common.unarchive": "Désarchiver",
 +  "settings.section.data": "Données",
@@ -429,11 +415,13 @@ diff --git a/packages/app/src/i18n/fr.ts b/packages/app/src/i18n/fr.ts
 +  "settings.archive.scope.current": "Projet actuel",
  }
 diff --git a/packages/app/src/i18n/ja.ts b/packages/app/src/i18n/ja.ts
+index 34ac398bd5..7f60b80f23 100644
 --- a/packages/app/src/i18n/ja.ts
 +++ b/packages/app/src/i18n/ja.ts
-@@ -753,3 +753,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "環境変数から接続されました",
-   "settings.providers.custom.description": "ベース URL を指定して OpenAI 互換のプロバイダーを追加します。",
+@@ -851,4 +851,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "永続プロジェクトアイコンの作成に失敗しました",
+   "error.childStore.storeCreateFailed": "ストアの作成に失敗しました",
+   "terminal.connectionLost.abnormalClose": "WebSocket が異常終了しました: {{code}}",
 +
 +  "common.unarchive": "アーカイブ解除",
 +  "settings.section.data": "データ",
@@ -444,11 +432,13 @@ diff --git a/packages/app/src/i18n/ja.ts b/packages/app/src/i18n/ja.ts
 +  "settings.archive.scope.current": "現在のプロジェクト",
  }
 diff --git a/packages/app/src/i18n/ko.ts b/packages/app/src/i18n/ko.ts
+index f1926f3dd2..014d75c3fe 100644
 --- a/packages/app/src/i18n/ko.ts
 +++ b/packages/app/src/i18n/ko.ts
-@@ -753,3 +753,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "환경 변수에서 연결됨",
-   "settings.providers.custom.description": "기본 URL로 OpenAI 호환 공급자를 추가합니다.",
+@@ -846,4 +846,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "영구 프로젝트 아이콘 생성 실패",
+   "error.childStore.storeCreateFailed": "저장소 생성 실패",
+   "terminal.connectionLost.abnormalClose": "WebSocket이 비정상적으로 닫힘: {{code}}",
 +
 +  "common.unarchive": "보관 해제",
 +  "settings.section.data": "데이터",
@@ -459,11 +449,13 @@ diff --git a/packages/app/src/i18n/ko.ts b/packages/app/src/i18n/ko.ts
 +  "settings.archive.scope.current": "현재 프로젝트",
  }
 diff --git a/packages/app/src/i18n/no.ts b/packages/app/src/i18n/no.ts
+index b4adebdb7c..fcda9be566 100644
 --- a/packages/app/src/i18n/no.ts
 +++ b/packages/app/src/i18n/no.ts
-@@ -836,3 +836,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Koblet til fra miljøvariablene dine",
-   "settings.providers.custom.description": "Legg til en OpenAI-kompatibel leverandør via basis-URL.",
+@@ -934,4 +934,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Kunne ikke opprette vedvarende prosjektikon",
+   "error.childStore.storeCreateFailed": "Kunne ikke opprette lager",
+   "terminal.connectionLost.abnormalClose": "WebSocket lukket unormalt: {{code}}",
 +
 +  "common.unarchive": "Fjern arkivering",
 +  "settings.section.data": "Data",
@@ -474,11 +466,13 @@ diff --git a/packages/app/src/i18n/no.ts b/packages/app/src/i18n/no.ts
 +  "settings.archive.scope.current": "Nåværende prosjekt",
  } satisfies Partial<Record<Keys, string>>
 diff --git a/packages/app/src/i18n/pl.ts b/packages/app/src/i18n/pl.ts
+index 02637e574f..0e99e58cae 100644
 --- a/packages/app/src/i18n/pl.ts
 +++ b/packages/app/src/i18n/pl.ts
-@@ -755,3 +755,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Połączono ze zmiennymi środowiskowymi",
-   "settings.providers.custom.description": "Dodaj dostawcę zgodnego z OpenAI poprzez podstawowy URL.",
+@@ -855,4 +855,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Nie udało się utworzyć trwałej ikony projektu",
+   "error.childStore.storeCreateFailed": "Nie udało się utworzyć magazynu",
+   "terminal.connectionLost.abnormalClose": "WebSocket zamknięty nieprawidłowo: {{code}}",
 +
 +  "common.unarchive": "Przywróć z archiwum",
 +  "settings.section.data": "Dane",
@@ -489,11 +483,13 @@ diff --git a/packages/app/src/i18n/pl.ts b/packages/app/src/i18n/pl.ts
 +  "settings.archive.scope.current": "Bieżący projekt",
  }
 diff --git a/packages/app/src/i18n/ru.ts b/packages/app/src/i18n/ru.ts
+index a965acf278..0b37ed3910 100644
 --- a/packages/app/src/i18n/ru.ts
 +++ b/packages/app/src/i18n/ru.ts
-@@ -836,3 +836,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Подключено из ваших переменных окружения",
-   "settings.providers.custom.description": "Добавить провайдера, совместимого с OpenAI, по базовому URL.",
+@@ -936,4 +936,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Не удалось создать постоянный значок проекта",
+   "error.childStore.storeCreateFailed": "Не удалось создать хранилище",
+   "terminal.connectionLost.abnormalClose": "WebSocket закрыт аварийно: {{code}}",
 +
 +  "common.unarchive": "Разархивировать",
 +  "settings.section.data": "Данные",
@@ -504,11 +500,13 @@ diff --git a/packages/app/src/i18n/ru.ts b/packages/app/src/i18n/ru.ts
 +  "settings.archive.scope.current": "Текущий проект",
  }
 diff --git a/packages/app/src/i18n/th.ts b/packages/app/src/i18n/th.ts
+index 00df86a34d..25846eb0c9 100644
 --- a/packages/app/src/i18n/th.ts
 +++ b/packages/app/src/i18n/th.ts
-@@ -826,3 +826,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "เชื่อมต่อจากตัวแปรสภาพแวดล้อมของคุณ",
-   "settings.providers.custom.description": "เพิ่มผู้ให้บริการที่รองรับ OpenAI ด้วย URL หลัก",
+@@ -923,4 +923,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "ไม่สามารถสร้างไอคอนโปรเจกต์ถาวร",
+   "error.childStore.storeCreateFailed": "ไม่สามารถสร้างที่เก็บ",
+   "terminal.connectionLost.abnormalClose": "WebSocket ปิดอย่างผิดปกติ: {{code}}",
 +
 +  "common.unarchive": "ยกเลิกการจัดเก็บ",
 +  "settings.section.data": "ข้อมูล",
@@ -519,11 +517,13 @@ diff --git a/packages/app/src/i18n/th.ts b/packages/app/src/i18n/th.ts
 +  "settings.archive.scope.current": "โปรเจกต์ปัจจุบัน",
  }
 diff --git a/packages/app/src/i18n/tr.ts b/packages/app/src/i18n/tr.ts
+index 27a6e03e36..f79155228a 100644
 --- a/packages/app/src/i18n/tr.ts
 +++ b/packages/app/src/i18n/tr.ts
-@@ -847,3 +847,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "Ortam değişkenlerinizden bağlandı",
-   "settings.providers.custom.description": "Temel URL üzerinden OpenAI uyumlu bir sağlayıcı ekleyin.",
+@@ -942,4 +942,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "Kalıcı proje simgesi oluşturulamadı",
+   "error.childStore.storeCreateFailed": "Depo oluşturulamadı",
+   "terminal.connectionLost.abnormalClose": "WebSocket anormal şekilde kapandı: {{code}}",
 +
 +  "common.unarchive": "Arşivden çıkar",
 +  "settings.section.data": "Veri",
@@ -533,12 +533,31 @@ diff --git a/packages/app/src/i18n/tr.ts b/packages/app/src/i18n/tr.ts
 +  "settings.archive.scope.all": "Tüm projeler",
 +  "settings.archive.scope.current": "Mevcut proje",
  } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/app/src/i18n/uk.ts b/packages/app/src/i18n/uk.ts
+index 948c9a6cd4..bc093fb764 100644
+--- a/packages/app/src/i18n/uk.ts
++++ b/packages/app/src/i18n/uk.ts
+@@ -966,4 +966,12 @@ export const dict = {
+   "workspace.reset.archived.one": "1 сесію буде заархівовано.",
+   "workspace.reset.archived.many": "{{count}} сесій буде заархівовано.",
+   "workspace.reset.note": "Це скине робочу область, щоб вона відповідала гілці за замовчуванням.",
++
++  "common.unarchive": "Розархівувати",
++  "settings.section.data": "Дані",
++  "settings.archive.title": "Архівні сесії",
++  "settings.archive.description": "Відновити архівні сесії, щоб вони відображались на бічній панелі.",
++  "settings.archive.none": "Немає архівних сесій.",
++  "settings.archive.scope.all": "Усі проєкти",
++  "settings.archive.scope.current": "Поточний проєкт",
+ }
 diff --git a/packages/app/src/i18n/zh.ts b/packages/app/src/i18n/zh.ts
+index f5c962a990..cd2cd6644c 100644
 --- a/packages/app/src/i18n/zh.ts
 +++ b/packages/app/src/i18n/zh.ts
-@@ -824,3 +824,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "已通过环境变量连接",
-   "settings.providers.custom.description": "通过基础 URL 添加与 OpenAI 兼容的提供商。",
+@@ -926,4 +926,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "创建持久化项目图标失败",
+   "error.childStore.storeCreateFailed": "创建存储失败",
+   "terminal.connectionLost.abnormalClose": "WebSocket 异常关闭：{{code}}",
 +
 +  "common.unarchive": "取消归档",
 +  "settings.section.data": "数据",
@@ -549,11 +568,13 @@ diff --git a/packages/app/src/i18n/zh.ts b/packages/app/src/i18n/zh.ts
 +  "settings.archive.scope.current": "当前项目",
  } satisfies Partial<Record<Keys, string>>
 diff --git a/packages/app/src/i18n/zht.ts b/packages/app/src/i18n/zht.ts
+index edd6f7bc06..2355dd5855 100644
 --- a/packages/app/src/i18n/zht.ts
 +++ b/packages/app/src/i18n/zht.ts
-@@ -819,3 +819,11 @@ export const dict = {
-   "settings.providers.connected.environmentDescription": "已從環境變數連線",
-   "settings.providers.custom.description": "透過基本 URL 新增與 OpenAI 相容的提供者。",
+@@ -914,4 +914,12 @@ export const dict = {
+   "error.childStore.persistedProjectIconCreateFailed": "建立持續性專案圖示失敗",
+   "error.childStore.storeCreateFailed": "建立儲存區失敗",
+   "terminal.connectionLost.abnormalClose": "WebSocket 異常關閉：{{code}}",
 +
 +  "common.unarchive": "取消封存",
 +  "settings.section.data": "資料",
@@ -563,3 +584,84 @@ diff --git a/packages/app/src/i18n/zht.ts b/packages/app/src/i18n/zht.ts
 +  "settings.archive.scope.all": "所有專案",
 +  "settings.archive.scope.current": "目前專案",
  } satisfies Partial<Record<Keys, string>>
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+index ac41487fd3..e80150cea3 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+@@ -49,7 +49,7 @@ export const UpdatePayload = Schema.Struct({
+   permission: Schema.optional(Permission.Ruleset),
+   time: Schema.optional(
+     Schema.Struct({
+-      archived: Schema.optional(Session.ArchivedTimestamp),
++      archived: Schema.optional(Schema.NullOr(Session.ArchivedTimestamp)),
+     }),
+   ),
+ })
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
+index 4061bec298..4169bb0ac8 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts
+@@ -140,10 +140,12 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
+       )
+       const list = sessions.length > limit ? sessions.slice(0, limit) : sessions
+       return HttpServerResponse.jsonUnsafe(list, {
+-        headers:
+-          sessions.length > limit && list.length > 0
++        headers: {
++          "Access-Control-Expose-Headers": "X-Next-Cursor",
++          ...(sessions.length > limit && list.length > 0
+             ? { "x-next-cursor": String(list[list.length - 1].time.updated) }
+-            : undefined,
++            : {}),
++        },
+       })
+     })
+
+diff --git a/packages/opencode/src/session/session.ts b/packages/opencode/src/session/session.ts
+index e84da3340c..97b16a5bd6 100644
+--- a/packages/opencode/src/session/session.ts
++++ b/packages/opencode/src/session/session.ts
+@@ -474,7 +474,7 @@ export interface Interface {
+   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
+   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
+   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
+-  readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
++  readonly setArchived: (input: { sessionID: SessionID; time?: number | null }) => Effect.Effect<void>
+   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
+   readonly setPermission: (input: { sessionID: SessionID; permission: Permission.Ruleset }) => Effect.Effect<void>
+   readonly setRevert: (input: {
+@@ -746,7 +746,7 @@ export const layer: Layer.Layer<
+       yield* patch(input.sessionID, { title: input.title })
+     })
+ 
+-    const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number }) {
++    const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number | null }) {
+       yield* patch(input.sessionID, { time: { archived: input.time } })
+     })
+ 
+diff --git a/packages/sdk/js/src/v2/gen/sdk.gen.ts b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+index 6c5ea3725e..3354b8dc66 100644
+--- a/packages/sdk/js/src/v2/gen/sdk.gen.ts
++++ b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+@@ -3248,7 +3248,7 @@ export class Session2 extends HeyApiClient {
+       }
+       permission?: PermissionRuleset
+       time?: {
+-        archived?: number
++        archived?: number | null
+       }
+     },
+     options?: Options<never, ThrowOnError>,
+diff --git a/packages/sdk/js/src/v2/gen/types.gen.ts b/packages/sdk/js/src/v2/gen/types.gen.ts
+index a1a720688c..6681c6fd4c 100644
+--- a/packages/sdk/js/src/v2/gen/types.gen.ts
++++ b/packages/sdk/js/src/v2/gen/types.gen.ts
+@@ -6240,7 +6240,7 @@ export type SessionUpdateData = {
+     }
+     permission?: PermissionRuleset
+     time?: {
+-      archived?: number
++      archived?: number | null
+     }
+   }
+   path: {

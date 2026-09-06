@@ -1,101 +1,76 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.bun/bin:$PATH"
 
-REPO_DIR="${1:?usage: build-desktop.sh <repo-dir> <dist-dir> [out-dir]}"
-DIST_DIR="${2:?usage: build-desktop.sh <repo-dir> <dist-dir> [out-dir]}"
-OUT_DIR="${3:-/tmp/opencode-dist}"
-
-VERSION="${OPENCODE_VERSION:-local}"
-VER="${VERSION//./_}"
+REPO_DIR="${1:?usage: build-desktop.sh <repo-dir> [out-dir]}"
+OUT_DIR="${2:-/tmp/opencode-dist}"
 
 DESKTOP_DIR="$REPO_DIR/packages/desktop"
 
-# Install frontend deps and build
-bun install --cwd "$DESKTOP_DIR"
+# prepare.ts writes Script.version into package.json; electron-builder and the
+# deb/rpm packagers expect plain semver without the leading "v" of the git tag.
+export OPENCODE_CHANNEL="${OPENCODE_CHANNEL:-prod}"
+VERSION="${OPENCODE_VERSION:-local}"
+VER="${VERSION//./_}"
+if [[ -n "${OPENCODE_VERSION:-}" ]]; then
+  export OPENCODE_VERSION="${OPENCODE_VERSION#v}"
+fi
+
+# CLI node bundle is wired by electron-vite itself (virtual:opencode-server)
+# and rebuilt from source by prepare.ts below; no prebuilt CLI binary from
+# build-cli.sh's output dir is copied around anymore.
+
+# devDeps are required here: electron, electron-builder, electron-vite, vite
+if [[ "$TARGET_OS" == "windows" ]]; then
+  bun install --cwd "$DESKTOP_DIR" --os=win32 --cpu=x64
+elif [[ "$TARGET_OS" == "linux" ]]; then
+  bun install --cwd "$DESKTOP_DIR"
+else
+  echo "unsupported TARGET_OS: $TARGET_OS" >&2
+  exit 1
+fi
+
+# icons/metainfo for the channel + CLI node bundle in packages/opencode/dist/node
+bun run --cwd "$DESKTOP_DIR" scripts/prepare.ts
+
+# electron-vite build -> packages/desktop/out/
 bun run --cwd "$DESKTOP_DIR" build
 
 mkdir -p "$OUT_DIR"
 
 if [[ "$TARGET_OS" == "linux" ]]; then
-  RUST_TARGET='x86_64-unknown-linux-gnu'
-  CLI_BIN="$DIST_DIR/opencode-${VER}-linux-x64"
-
-  # Copy CLI sidecar (no extension on Linux)
-  mkdir -p "$DESKTOP_DIR/src-tauri/sidecars"
-  cp "$CLI_BIN" "$DESKTOP_DIR/src-tauri/sidecars/opencode-cli-${RUST_TARGET}"
-  chmod +x "$DESKTOP_DIR/src-tauri/sidecars/opencode-cli-${RUST_TARGET}"
-
-  rustup target add "$RUST_TARGET"
-
-  # Build deb + rpm packages natively — no cross-compilation needed.
-  # Note: --bundles is not passed for the same reason as nsis on Windows
-  # (tauri-cli may reject unknown bundle types at arg-parse time on some builds).
+  export RUST_TARGET='x86_64-unknown-linux-gnu'
   (
-    cd "$DESKTOP_DIR/src-tauri"
-    cargo tauri build \
-      --target "$RUST_TARGET" \
-      --config '{"bundle":{"targets":["deb","rpm"]}}' \
-      2>&1
+    cd "$DESKTOP_DIR"
+    npx electron-builder --linux --x64 --publish never --config electron-builder.config.ts
   )
-
-  # Collect .deb package
-  find "$DESKTOP_DIR/src-tauri/target/$RUST_TARGET/release/bundle/deb" \
-    -name '*.deb' \
-    -exec cp -v {} "$OUT_DIR/opencode-desktop-${VER}-linux-amd64.deb" \;
-
-  # Collect .rpm package
-  find "$DESKTOP_DIR/src-tauri/target/$RUST_TARGET/release/bundle/rpm" \
-    -name '*.rpm' \
-    -exec cp -v {} "$OUT_DIR/opencode-desktop-${VER}-linux-x86_64.rpm" \;
-
-  echo "Desktop packages ready in $OUT_DIR"
-  rm -rv "$DESKTOP_DIR/src-tauri/target/$RUST_TARGET/release/bundle"
+  # electron-builder names files as opencode-desktop-linux-{arch}.{ext};
+  # copy under explicit names carrying the "vX_Y_Z" tag, matching build-cli.sh.
+  cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-x86_64.AppImage" \
+    "$OUT_DIR/opencode-desktop-${VER}-linux-x86_64.AppImage"
+  cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-amd64.deb" \
+    "$OUT_DIR/opencode-desktop-${VER}-linux-amd64.deb"
+  cp -v "$DESKTOP_DIR/dist/opencode-desktop-linux-x86_64.rpm" \
+    "$OUT_DIR/opencode-desktop-${VER}-linux-x86_64.rpm"
+elif [[ "$TARGET_OS" == "windows" ]]; then
+  # Cross-build on Ubuntu: NSIS target needs wine, nothing else
+  export RUST_TARGET='x86_64-pc-windows-msvc'
+  (
+    cd "$DESKTOP_DIR"
+    npx electron-builder --win --x64 --publish never --config electron-builder.config.ts
+  )
+  # electron-builder's ${os} placeholder resolves to "win" for Windows,
+  # unlike "linux" above which matches our own naming already.
+  cp -v "$DESKTOP_DIR/dist/opencode-desktop-win-x64.exe" \
+    "$OUT_DIR/opencode-desktop-${VER}-windows-x64.exe"
 else
-  RUST_TARGET='x86_64-pc-windows-msvc'
-  CLI_EXE="$DIST_DIR/opencode-${VER}-windows-x64.exe"
-
-  # Copy CLI sidecar
-  mkdir -p "$DESKTOP_DIR/src-tauri/sidecars"
-  cp "$CLI_EXE" "$DESKTOP_DIR/src-tauri/sidecars/opencode-cli-${RUST_TARGET}.exe"
-
-  # Ensure the Windows target is present (may be missing after cache restore)
-  rustup target add "$RUST_TARGET"
-
-  # cargo-xwin is a cargo subcommand: invoked as "cargo xwin build".
-  # tauri-cli's --runner takes a single binary name (no spaces), so we create a
-  # thin wrapper script that forwards all args to "cargo xwin".
-  XWIN_WRAPPER="$(mktemp /tmp/cargo-xwin-runner.XXXXXX)"
-  cat >"$XWIN_WRAPPER" <<'WRAPPER'
-#!/usr/bin/env bash
-exec cargo xwin "$@"
-WRAPPER
-  chmod +x "$XWIN_WRAPPER"
-
-  # Build Tauri NSIS installer via cargo-xwin.
-  # Must run from src-tauri dir — tauri-cli resolves tauri.conf.json by walking
-  # up from CWD, not from --config path.
-  # Note: --bundles nsis is not passed because tauri-cli compiled for Linux
-  # excludes nsis from ALL_PACKAGE_TYPES at compile time, causing CLI arg
-  # validation to fail. Instead, targets are set to ["nsis"] via --config.
-  (
-    cd "$DESKTOP_DIR/src-tauri"
-    XWIN_ARCH=x86_64 \
-      cargo tauri build \
-      --runner "$XWIN_WRAPPER" \
-      --target "$RUST_TARGET" \
-      --config '{"bundle":{"targets":["nsis"]}}' \
-      2>&1
-  )
-  rm -f "$XWIN_WRAPPER"
-
-  # Collect installer
-  find "$DESKTOP_DIR/src-tauri/target/$RUST_TARGET/release/bundle/nsis" \
-    -name '*.exe' \
-    -exec cp -v {} "$OUT_DIR/opencode-desktop-${VER}-windows-x64.exe" \;
-
-  echo "Desktop installer ready in $OUT_DIR"
-  rm -rv "$DESKTOP_DIR/src-tauri/target/$RUST_TARGET/release/bundle"
+  echo "unsupported TARGET_OS: $TARGET_OS" >&2
+  exit 1
 fi
-rm -rv "$DESKTOP_DIR/src-tauri/sidecars"
+
+echo "Desktop artifacts ready in $OUT_DIR"
+
+# Keep the CI cache lean: unpacked app trees and installers are recreated
+# on every run anyway.
+rm -rf "$DESKTOP_DIR/dist"

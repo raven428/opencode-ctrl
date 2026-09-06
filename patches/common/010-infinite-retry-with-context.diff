@@ -1,114 +1,122 @@
 diff --git a/packages/opencode/src/session/processor.ts b/packages/opencode/src/session/processor.ts
-index 67edc0ecf..5e01635b4 100644
+index a287c3b006..7563c4ac2a 100644
 --- a/packages/opencode/src/session/processor.ts
 +++ b/packages/opencode/src/session/processor.ts
-@@ -46,6 +46,81 @@ export namespace SessionProcessor {
-         log.info("process")
-         needsCompaction = false
-         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
+@@ -11,7 +11,7 @@ import * as Session from "./session"
+ import { LLM } from "./llm"
+ import { MessageV2 } from "./message-v2"
+ import { isOverflow } from "./overflow"
+-import { PartID } from "./schema"
++import { MessageID, PartID } from "./schema"
+ import type { SessionID } from "./schema"
+ import { SessionRetry } from "./retry"
+ import { SessionStatus } from "./status"
+@@ -78,6 +78,7 @@ interface ProcessorContext extends Input {
+   needsCompaction: boolean
+   currentText: MessageV2.TextPart | undefined
+   reasoningMap: Record<string, MessageV2.ReasoningPart>
++  timeoutRecovery: boolean
+ }
+ 
+ type StreamEvent = LLMEvent
+@@ -118,6 +119,7 @@ export const layer = Layer.effect(
+         needsCompaction: false,
+         currentText: undefined,
+         reasoningMap: {},
++        timeoutRecovery: false,
+       }
+       let aborted = false
+       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
+@@ -128,6 +130,13 @@ export const layer = Layer.effect(
+           aborted,
+         })
+ 
++      const isNetworkTimeout = (error: unknown) => {
++        if (!error || typeof error !== "object") return false
++        const value = error as { name?: unknown; message?: unknown }
++        return value.name === "TimeoutError" ||
++          (typeof value.message === "string" && /operation timed out/i.test(value.message))
++      }
 +
-+        // Detect the bare network read timeout ("TimeoutError: The operation timed out.").
-+        // undici / AbortSignal.timeout raise it with name "TimeoutError"; it is normalized to
-+        // NamedError.Unknown and is not covered by the standard retry logic, so on its own it
-+        // silently hands control back to the user. Everything else (429, overload, rate limit,
-+        // etc.) keeps using the standard retry path with its own retry-after aware backoff.
-+        const isNetworkTimeout = (raw: unknown) => {
-+          const err = raw as { name?: string; message?: string } | undefined
-+          if (err?.name === "TimeoutError") return true
-+          return typeof err?.message === "string" && /operation timed out/i.test(err.message)
-+        }
+       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
+         const done = ctx.toolcalls[toolCallID]?.done
+         delete ctx.toolcalls[toolCallID]
+@@ -704,6 +713,8 @@ export const layer = Layer.effect(
+           ctx.snapshot = undefined
+         }
+ 
++        if (ctx.timeoutRecovery) ctx.assistantMessage.finish = "unknown"
 +
-+        // Finalize the assistant message that was interrupted mid-stream so it becomes a
-+        // valid, self-consistent history entry. Unfinished reasoning is dropped (its provider
-+        // signature never arrived, so providers like Anthropic reject it), still-open tool
-+        // calls are closed as errored, and the message is marked finished.
-+        const finalizePartial = async () => {
-+          const parts = await MessageV2.parts(input.assistantMessage.id)
-+          for (const part of parts) {
-+            if (part.type === "reasoning" && !part.time?.end) {
-+              await Session.removePart({
-+                sessionID: input.sessionID,
-+                messageID: input.assistantMessage.id,
-+                partID: part.id,
-+              })
-+              continue
-+            }
-+            if (part.type === "text" && !part.time?.end) {
-+              await Session.updatePart({
-+                ...part,
-+                text: part.text.trimEnd(),
-+                time: { start: part.time?.start ?? Date.now(), end: Date.now() },
-+              })
-+              continue
-+            }
-+            if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
-+              await Session.updatePart({
-+                ...part,
-+                state: {
-+                  ...part.state,
-+                  status: "error",
-+                  error: "Tool execution interrupted, retrying",
-+                  time: { start: Date.now(), end: Date.now() },
-+                },
-+              })
-+            }
+         if (ctx.currentText) {
+           const end = Date.now()
+           ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+@@ -712,6 +723,14 @@ export const layer = Layer.effect(
+         }
+ 
+         for (const part of Object.values(ctx.reasoningMap)) {
++          if (ctx.timeoutRecovery) {
++            yield* session.removePart({
++              sessionID: part.sessionID,
++              messageID: part.messageID,
++              partID: part.id,
++            })
++            continue
 +          }
-+          input.assistantMessage.finish = input.assistantMessage.finish ?? "unknown"
-+          input.assistantMessage.time.completed = Date.now()
-+          await Session.updateMessage(input.assistantMessage)
-+        }
-+
-+        // Append a synthetic user message asking the model to continue. This lets the main
-+        // loop rebuild the whole prompt from the DB on its next iteration and keeps the
-+        // interrupted network state visible to the user in the transcript.
-+        const appendContinuePrompt = async () => {
-+          const continueUserMsg: MessageV2.User = {
-+            id: Identifier.ascending("message"),
-+            sessionID: input.sessionID,
-+            role: "user",
-+            time: { created: Date.now() },
-+            agent: streamInput.user.agent,
-+            model: streamInput.user.model,
+           const end = Date.now()
+           yield* session.updatePart({
+             ...part,
+@@ -780,6 +799,7 @@ export const layer = Layer.effect(
+       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
+         slog.info("process")
+         ctx.needsCompaction = false
++        ctx.timeoutRecovery = false
+         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+ 
+         return yield* Effect.gen(function* () {
+@@ -838,10 +858,46 @@ export const layer = Layer.effect(
+                 },
+               }),
+             ),
++            Effect.catchIf(
++              (error) =>
++                SessionRetry.retryable(parse(error), input.model.providerID) === undefined && isNetworkTimeout(error),
++              () =>
++                Effect.gen(function* () {
++                  ctx.timeoutRecovery = true
++                  const delay = SessionRetry.delay(1)
++                  yield* status.set(ctx.sessionID, {
++                    type: "retry",
++                    attempt: 1,
++                    message: "Network timeout, continuing",
++                    next: Date.now() + delay,
++                  })
++                  yield* Effect.sleep(delay)
++                }),
++            ),
+             Effect.catch(halt),
+             Effect.ensuring(cleanup()),
+           )
+ 
++          if (ctx.timeoutRecovery) {
++            const user: MessageV2.User = {
++              id: MessageID.ascending(),
++              sessionID: ctx.sessionID,
++              role: "user",
++              time: { created: Date.now() },
++              agent: streamInput.user.agent,
++              model: streamInput.user.model,
++            }
++            yield* session.updateMessage(user)
++            yield* session.updatePart({
++              id: PartID.ascending(),
++              messageID: user.id,
++              sessionID: ctx.sessionID,
++              type: "text",
++              text: "The previous response was interrupted by a network error. Please continue exactly where you left off, without repeating what you already produced.",
++              synthetic: true,
++            } satisfies MessageV2.TextPart)
++            return "continue"
 +          }
-+          await Session.updateMessage(continueUserMsg)
-+          await Session.updatePart({
-+            id: Identifier.ascending("part"),
-+            messageID: continueUserMsg.id,
-+            sessionID: input.sessionID,
-+            type: "text",
-+            text: "The previous response was interrupted by a network error. Please continue exactly where you left off, without repeating what you already produced.",
-+            synthetic: true,
-+          } satisfies MessageV2.TextPart)
-+        }
-+
-         while (true) {
-           try {
-             let currentText: MessageV2.TextPart | undefined
-@@ -376,6 +451,27 @@ export namespace SessionProcessor {
-                 await SessionRetry.sleep(delay, input.abort).catch(() => {})
-                 continue
-               }
-+              // Standard retry did not apply. If this is the bare network read timeout,
-+              // recover by finalizing the partial answer and asking the model to continue on
-+              // the next loop iteration, instead of surfacing the error to the user.
-+              if (isNetworkTimeout(e)) {
-+                attempt++
-+                const delay = SessionRetry.delay(attempt)
-+                SessionStatus.set(input.sessionID, {
-+                  type: "retry",
-+                  attempt,
-+                  message: "Network timeout, continuing",
-+                  next: Date.now() + delay,
-+                })
-+                await SessionRetry.sleep(delay, input.abort).catch(() => {})
-+                try {
-+                  await finalizePartial()
-+                  await appendContinuePrompt()
-+                } catch (recoverError) {
-+                  log.error("timeout recovery failed", { error: recoverError })
-+                }
-+                return "continue"
-+              }
-               input.assistantMessage.error = error
-               Bus.publish(Session.Event.Error, {
-                 sessionID: input.assistantMessage.sessionID,
+           if (ctx.needsCompaction) return "compact"
+           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+           return "continue"

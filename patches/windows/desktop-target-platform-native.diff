@@ -1,0 +1,13 @@
+--- a/packages/desktop/electron.vite.config.ts
++++ b/packages/desktop/electron.vite.config.ts
+@@ -12,7 +12,9 @@
+   return "dev"
+ })()
+ 
+-const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
++// Cross-build: build host is Ubuntu, target is Windows. Hard-code the win32
++// native binding so the linux one does not accidentally end up in the .exe.
++const nodePtyPkg = `@lydell/node-pty-win32-${process.arch}`
+ 
+ const sentry =
+   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
