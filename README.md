@@ -10,6 +10,7 @@
 - `009-timestamp-24h` – show message timestamps in 24h format with ISO-like date
 - `010-timeout-continue` – auto recover session after timeout error
 - `011-mcp-auto-reconnect` – auto reconnect disconnected mcp servers
+- `012-mcp-status-display` – backport of MCP servers showing fix
 
 ### Retired
 
