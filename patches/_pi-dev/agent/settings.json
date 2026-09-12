@@ -1,0 +1,16 @@
+{
+  "packages": [
+    "npm:@jmfederico/pi-web",
+    "../../.local/pi-dev/node_modules/@jmfederico/pi-web/dist/pi-packages/relays"
+  ],
+  "quietStartup": true,
+  "enableAnalytics": false,
+  "lastChangelogVersion": "0.85.1",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-4.7",
+  "theme": "dark",
+  "hideThinkingBlock": false,
+  "warnings": {
+    "anthropicExtraUsage": false
+  }
+}

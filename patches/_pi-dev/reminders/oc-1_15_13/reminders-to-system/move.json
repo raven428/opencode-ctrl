@@ -1,0 +1,9 @@
+{
+  "reminders": [],
+  "system": [
+    {
+      "$ref": "90sys-opencode.md"
+    }
+  ],
+  "systemPlacement": "after_all"
+}
