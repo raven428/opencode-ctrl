@@ -3,6 +3,11 @@
     "npm:@jmfederico/pi-web",
     "../../.local/pi-dev/node_modules/@jmfederico/pi-web/dist/pi-packages/relays"
   ],
+  "extensions": [
+    "/workspace/vscode/raven/opencode-ctrl/patches/_pi-dev/extensions/move-reminders-to-system.ts",
+    "/workspace/vscode/raven/opencode-ctrl/patches/_pi-dev/extensions/anthropic-oauth-fingerprint.ts",
+    "/workspace/vscode/raven/opencode-ctrl/patches/_pi-dev/extensions/normalize-claude-tool-names.ts"
+  ],
   "quietStartup": true,
   "enableAnalytics": false,
   "lastChangelogVersion": "0.85.1",

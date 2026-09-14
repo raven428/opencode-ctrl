@@ -23,7 +23,6 @@
     }
   ],
   "system": [
-    "x-anthropic-billing-header: cc_version=2.1.269.3cc; cc_entrypoint=cli;",
     "You are Claude Code, Anthropic's official CLI for Claude.",
     {
       "$ref": "90sys-claude.md"
