@@ -69,6 +69,31 @@ function isProviderPayload(payload: unknown): payload is ProviderPayload {
   return typeof payload === 'object' && payload !== null && !Array.isArray(payload);
 }
 
+function commandLineFlagValue(name: string) {
+  const flag = `--${name}`;
+  for (let index = 2; index < process.argv.length; index++) {
+    const argument = process.argv[index];
+    if (!argument) continue;
+    if (argument === flag) return process.argv[index + 1];
+    if (argument.startsWith(`${flag}=`)) return argument.slice(flag.length + 1);
+  }
+}
+
+function loadHappierPromptAddition() {
+  const configPath = commandLineFlagValue('happy-tools-config');
+  if (!configPath?.trim()) return;
+  try {
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) return;
+    const promptAddition = (config as { promptAddition?: unknown }).promptAddition;
+    return typeof promptAddition === 'string' && promptAddition.trim()
+      ? promptAddition
+      : undefined;
+  } catch {
+    return;
+  }
+}
+
 function isPromptFileReference(value: unknown): value is PromptFileReference {
   return (
     typeof value === 'object' &&
@@ -286,9 +311,19 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
   const prompt = loadPromptConfig();
   const placeholders = usedPlaceholders(prompt);
   let environmentSnapshot: Promise<EnvironmentSnapshot> | undefined;
+  let appendedSystemPrompts: string[] = [];
 
   pi.on('session_start', (_event, ctx) => {
     environmentSnapshot = collectEnvironmentSnapshot(pi, ctx.cwd, placeholders);
+  });
+
+  pi.on('before_agent_start', (event) => {
+    appendedSystemPrompts = [
+      loadHappierPromptAddition(),
+      event.systemPromptOptions.appendSystemPrompt,
+    ].filter((text, index, values): text is string => (
+      typeof text === 'string' && text.trim().length > 0 && values.indexOf(text) === index
+    ));
   });
 
   pi.on('before_provider_request', async (event, ctx) => {
@@ -302,8 +337,11 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
       crs_model_full: `${model ? ctx.modelRegistry.getProviderDisplayName(model.provider) : 'unknown'}/${model?.id ?? 'unknown'}`,
     };
     const reminders = prompt.reminders.map((text) => resolvePlaceholders(text, values));
-    const system = prompt.system.map((text) => resolvePlaceholders(text, values));
     const { tools, messages = [], ...payload } = event.payload;
+    const system = [
+      ...prompt.system.map((text) => resolvePlaceholders(text, values)),
+      ...appendedSystemPrompts,
+    ];
     const filteredMessages = messages.filter((message) => message.role !== 'developer');
     const combined = prompt.systemPlacement === 'before_reminders'
       ? [...system, ...reminders]
