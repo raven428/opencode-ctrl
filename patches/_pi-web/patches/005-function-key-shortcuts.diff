@@ -1,6 +1,6 @@
 diff -ruN a/docs/config.md b/docs/config.md
---- a/docs/config.md	2026-09-18 12:09:33.667940657 +0000
-+++ b/docs/config.md	2026-09-18 12:09:33.667940657 +0000
+--- a/docs/config.md	2026-09-18 12:19:08.298951365 +0000
++++ b/docs/config.md	2026-09-18 12:19:08.298951365 +0000
 @@ -455,17 +455,20 @@
  
  ### Shortcut config
@@ -25,8 +25,8 @@ diff -ruN a/docs/config.md b/docs/config.md
  
  ### Chat card disclosure config
 diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/client/src/components/settings/SettingsShortcutsPanel.ts
---- a/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:09:33.659940550 +0000
-+++ b/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:09:33.659940550 +0000
+--- a/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:19:08.290951310 +0000
++++ b/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:19:08.294951337 +0000
 @@ -2,7 +2,7 @@
  import { customElement, property, state } from "lit/decorators.js";
  import type { AppAction } from "../../actions";
@@ -36,7 +36,7 @@ diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/c
  import { readPromptEnterPreference, writePromptEnterPreference, type PromptEnterPreference } from "../../promptEnterBehavior";
  import "./SettingsPanelFrame";
  import type { SettingsNotice } from "./SettingsPanelFrame";
-@@ -28,7 +28,7 @@
+@@ -33,7 +33,7 @@
  ];
  
  function renderShortcutsDescription(): TemplateResult {
@@ -45,7 +45,7 @@ diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/c
  }
  
  @customElement("settings-shortcuts-panel")
-@@ -64,8 +64,8 @@
+@@ -69,8 +69,8 @@
        this.localError = "Press a letter, number, punctuation, function, or navigation key. Press Esc to cancel recording.";
        return;
      }
@@ -56,7 +56,7 @@ diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/c
        return;
      }
  
-@@ -226,7 +226,7 @@
+@@ -231,7 +231,7 @@
    private recordingHint(actionId: string): string {
      const recording = this.recording;
      if (recording?.actionId !== actionId) return "";
@@ -66,8 +66,8 @@ diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/c
    }
  
 diff -ruN a/src/client/src/keyboardShortcuts.ts b/src/client/src/keyboardShortcuts.ts
---- a/src/client/src/keyboardShortcuts.ts	2026-09-18 12:09:33.651940444 +0000
-+++ b/src/client/src/keyboardShortcuts.ts	2026-09-18 12:09:33.651940444 +0000
+--- a/src/client/src/keyboardShortcuts.ts	2026-09-18 12:19:08.286951281 +0000
++++ b/src/client/src/keyboardShortcuts.ts	2026-09-18 12:19:08.286951281 +0000
 @@ -4,6 +4,7 @@
  
  const modifierOrder = ["mod", "alt", "shift"] as const;

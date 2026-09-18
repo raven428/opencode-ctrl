@@ -23,7 +23,7 @@
 
 ## List of `patches/_pi-web/patches`
 
-- `001-prompt-send-chord` – bundled plugin sending the composer message on `Ctrl+Enter`
+- `001-prompt-send-chord` – new "Ctrl+Enter sends message" Enter-key preference: Enter/Shift+Enter always insert a line break, Ctrl+Enter (⌘+Enter on macOS) sends
 - `002-chat-card-disclosure` – configurable disclosure (`none`/`live`/`last`/`all`) for thinking, skill, and tool-result/details/diff transcript cards
   - `ui.disclosure.thinking` – `"none"` (default) | `"live"` | `"last"` | `"all"`
   - `ui.disclosure.skillInvocation` – `"none"` (default) | `"live"` | `"last"` | `"all"`
