@@ -1,7 +1,52 @@
+diff -ruN a/src/client/src/appShell/navigationState.ts b/src/client/src/appShell/navigationState.ts
+--- a/src/client/src/appShell/navigationState.ts	2026-09-18 15:44:39.213101675 +0000
++++ b/src/client/src/appShell/navigationState.ts	2026-09-18 15:48:21.094326277 +0000
+@@ -1,4 +1,5 @@
+ import type { ReactiveController, ReactiveControllerHost } from "lit";
++import { readStoredPanelCollapse, writeStoredPanelCollapse, type PanelCollapseStorage } from "./panelCollapseController";
+ 
+ export const NAVIGATION_SECTION_ORDER = ["machines", "projects", "workspaces", "sessions"] as const;
+ export type NavigationSection = (typeof NAVIGATION_SECTION_ORDER)[number];
+@@ -45,9 +46,14 @@
+   return NAVIGATION_SECTION_ORDER[NAVIGATION_SECTION_ORDER.indexOf(section) + 1];
+ }
+ 
++export function parseCollapsedNavigationSections(values: readonly string[]): NavigationSection[] {
++  return NAVIGATION_SECTION_ORDER.filter((section) => values.includes(section));
++}
++
+ export class NavigationSectionsController implements ReactiveController {
+   private expanded: ExpandedNavigationSection;
+-  private collapsedSections: readonly NavigationSection[] = [];
++  private collapsedSections: readonly NavigationSection[];
++  private readonly storage: PanelCollapseStorage | undefined;
+ 
+   hostConnected(): void {
+     return;
+@@ -57,8 +63,11 @@
+     private readonly host: ReactiveControllerHost,
+     private readonly getState: () => NavigationSelectionState,
+     private readonly isMobileLayout: () => boolean,
++    options: { storage?: PanelCollapseStorage } = {},
+   ) {
+     host.addController(this);
++    this.storage = options.storage;
++    this.collapsedSections = parseCollapsedNavigationSections(readStoredPanelCollapse(this.storage).navigationSections ?? []);
+   }
+ 
+   expandedSection(): NavigationSection | undefined {
+@@ -111,6 +120,7 @@
+   private setCollapsedSections(collapsedSections: readonly NavigationSection[]): void {
+     if (navigationSectionListsEqual(this.collapsedSections, collapsedSections)) return;
+     this.collapsedSections = collapsedSections;
++    writeStoredPanelCollapse({ navigationSections: [...collapsedSections] }, this.storage);
+     this.host.requestUpdate();
+   }
+ }
 diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/appShell/panelCollapseController.ts
---- a/src/client/src/appShell/panelCollapseController.ts	2026-09-18 12:07:08.437983487 +0000
-+++ b/src/client/src/appShell/panelCollapseController.ts	2026-09-18 12:07:08.441983673 +0000
-@@ -1,37 +1,65 @@
+--- a/src/client/src/appShell/panelCollapseController.ts	2026-09-18 15:47:49.802026932 +0000
++++ b/src/client/src/appShell/panelCollapseController.ts	2026-09-18 15:48:10.134226299 +0000
+@@ -1,37 +1,69 @@
  import type { ReactiveController, ReactiveControllerHost } from "lit";
  import type { AppState } from "../appState";
  
@@ -10,6 +55,8 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
 +export interface PanelCollapsePreferences {
 +  navigationPanelCollapsed?: boolean;
 +  workspacePanelCollapsed?: boolean;
++  navigationSections?: string[];
++  archivedSessionsExpanded?: boolean;
 +}
 +
 +export interface PanelCollapseControllerOptions {
@@ -22,6 +69,8 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
 +  version: 1;
 +  navigationPanelCollapsed?: boolean;
 +  workspacePanelCollapsed?: boolean;
++  navigationSections?: string[];
++  archivedSessionsExpanded?: boolean;
 +}
 +
  export class PanelCollapseController implements ReactiveController {
@@ -73,7 +122,7 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
      this.host.requestUpdate();
    }
  
-@@ -43,6 +71,13 @@
+@@ -43,6 +75,13 @@
        ...(this.workspacePanelCollapsed ? ["workspace-panel-collapsed"] : []),
      ].join(" ");
    }
@@ -87,7 +136,7 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
  }
  
  export function mainViewClass(mainView: AppState["mainView"]): "navigation-view" | "chat-view" | "workspace-view" {
-@@ -50,3 +85,57 @@
+@@ -50,3 +89,66 @@
    if (mainView === "chat") return "chat-view";
    return "workspace-view";
  }
@@ -111,9 +160,13 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
 +export function writeStoredPanelCollapse(preferences: PanelCollapsePreferences, storage: PanelCollapseStorage | undefined = browserPanelCollapseStorage()): void {
 +  if (storage === undefined) return;
 +  try {
++    const current = readStoredPanelCollapse(storage);
++    const merged: PanelCollapsePreferences = { ...current, ...preferences };
 +    const envelope: StoredPanelCollapseEnvelope = { version: 1 };
-+    if (preferences.navigationPanelCollapsed !== undefined) envelope.navigationPanelCollapsed = preferences.navigationPanelCollapsed;
-+    if (preferences.workspacePanelCollapsed !== undefined) envelope.workspacePanelCollapsed = preferences.workspacePanelCollapsed;
++    if (merged.navigationPanelCollapsed !== undefined) envelope.navigationPanelCollapsed = merged.navigationPanelCollapsed;
++    if (merged.workspacePanelCollapsed !== undefined) envelope.workspacePanelCollapsed = merged.workspacePanelCollapsed;
++    if (merged.navigationSections !== undefined) envelope.navigationSections = merged.navigationSections;
++    if (merged.archivedSessionsExpanded !== undefined) envelope.archivedSessionsExpanded = merged.archivedSessionsExpanded;
 +    storage.setItem(PANEL_COLLAPSE_STORAGE_KEY, JSON.stringify(envelope));
 +  } catch {
 +    // Ignore localStorage quota/privacy errors; the collapse state still applies in memory for this tab.
@@ -124,11 +177,16 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
 +function parseStoredPanelCollapse(value: unknown): PanelCollapsePreferences | undefined {
 +  if (!isRecord(value) || value["version"] !== 1) return undefined;
 +  const preferences: PanelCollapsePreferences = {};
-+  for (const key of ["navigationPanelCollapsed", "workspacePanelCollapsed"] as const) {
++  for (const key of ["navigationPanelCollapsed", "workspacePanelCollapsed", "archivedSessionsExpanded"] as const) {
 +    const field = value[key];
 +    if (field === undefined) continue;
 +    if (typeof field !== "boolean") return undefined;
 +    preferences[key] = field;
++  }
++  const navigationSections = value["navigationSections"];
++  if (navigationSections !== undefined) {
++    if (!Array.isArray(navigationSections) || !navigationSections.every((section): section is string => typeof section === "string")) return undefined;
++    preferences.navigationSections = navigationSections;
 +  }
 +  return preferences;
 +}
@@ -145,3 +203,31 @@ diff -ruN a/src/client/src/appShell/panelCollapseController.ts b/src/client/src/
 +function isRecord(value: unknown): value is Record<string, unknown> {
 +  return typeof value === "object" && value !== null;
 +}
+diff -ruN a/src/client/src/components/SessionList.ts b/src/client/src/components/SessionList.ts
+--- a/src/client/src/components/SessionList.ts	2026-09-18 15:44:39.225101717 +0000
++++ b/src/client/src/components/SessionList.ts	2026-09-18 15:48:35.042426477 +0000
+@@ -6,6 +6,7 @@
+ import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
+ import { normalizeSessionPath } from "../sessionPaths";
+ import { isSessionActive } from "../../../shared/activity";
++import { readStoredPanelCollapse, writeStoredPanelCollapse } from "../appShell/panelCollapseController";
+ import { actionMenuPanelStyle } from "./actionMenu";
+ import { renderActionActivityIndicator, type ActivityIndicatorKind } from "./activityBadge";
+ import type { KeyboardNavigableSection } from "./navigationFocus";
+@@ -67,7 +68,7 @@
+ 
+   @state() private openMenuSessionId: string | undefined;
+   @state() private menuStyle = "";
+-  @state() private archivedExpanded = false;
++  @state() private archivedExpanded = readStoredPanelCollapse().archivedSessionsExpanded ?? false;
+   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
+   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
+ 
+@@ -453,6 +454,7 @@
+ 
+   private toggleArchived() {
+     this.archivedExpanded = !this.archivedExpanded;
++    writeStoredPanelCollapse({ archivedSessionsExpanded: this.archivedExpanded });
+     if (!this.archivedExpanded) {
+       this.openMenuSessionId = undefined;
+       if (this.selectionScopes.has("archived")) this.closeSelection("archived");

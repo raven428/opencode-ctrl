@@ -24,13 +24,12 @@
 ## List of `patches/_pi-web/patches`
 
 - `001-prompt-send-chord` – new "Ctrl+Enter sends message" Enter-key preference: Enter/Shift+Enter always insert a line break, Ctrl+Enter (⌘+Enter on macOS) sends
-- `002-chat-card-disclosure` – configurable disclosure (`none`/`live`/`last`/`all`) for thinking, skill, and tool-result/details/diff transcript cards
+- `002-chat-card-disclosure` – configurable disclosure (`none`/`live`/`last`/`all`) for thinking, skill, and tool-result/details/diff transcript cards, plus a sixth `eventsGroup` subkey for the summarizing events group card
   - `ui.disclosure.thinking` – `"none"` (default) | `"live"` | `"last"` | `"all"`
   - `ui.disclosure.skillInvocation` – `"none"` (default) | `"live"` | `"last"` | `"all"`
   - `ui.disclosure.toolResult` – `"none"` (default) | `"live"` | `"last"` | `"all"`
   - `ui.disclosure.toolDetails` – `"none"` (default) | `"live"` | `"last"` | `"all"`
   - `ui.disclosure.toolDiff` – `"none"` | `"live"` | `"last"` | `"all"` (default)
-- `003-events-group-disclosure` – configurable disclosure (`live`/`last`/`all`) for the summarizing events group card, without auto-collapsing it after work finishes
   - `ui.disclosure.eventsGroup` – `"live"` (default) | `"last"` | `"all"` (`"none"` is not accepted)
 
 ```json
@@ -48,7 +47,7 @@
 }
 ```
 
-- `004-panel-collapse-persistence` – persist navigation/workspace panel collapsed state across tab reloads
+- `004-panel-collapse-persistence` – persist navigation/workspace panel collapsed state, navigation section (`machines`/`projects`/`workspaces`/`sessions`) collapsed state, and the archived sessions section's expanded state across tab reloads
 - `005-function-key-shortcuts` – allow lone function keys (`F1`-`F24`) as shortcut activators, not just Ctrl/Cmd/Alt chords
 
 ## List of issues
