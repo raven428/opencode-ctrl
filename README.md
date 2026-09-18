@@ -47,6 +47,7 @@
 }
 ```
 
+- `003-agent-session-title` – disable PI WEB's extra model request for automatic session naming and forward pi.dev extension-driven title changes live to the browser
 - `004-panel-collapse-persistence` – persist navigation/workspace panel collapsed state, navigation section (`machines`/`projects`/`workspaces`/`sessions`) collapsed state, and the archived sessions section's expanded state across tab reloads
 - `005-function-key-shortcuts` – allow lone function keys (`F1`-`F24`) as shortcut activators, not just Ctrl/Cmd/Alt chords
 

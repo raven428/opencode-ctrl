@@ -1,0 +1,419 @@
+diff -ruN -x .git a/src/server/sessions/piSessionService.promptQueue.test.ts b/src/server/sessions/piSessionService.promptQueue.test.ts
+--- a/src/server/sessions/piSessionService.promptQueue.test.ts	2026-09-18 17:51:30.993956484 +0000
++++ b/src/server/sessions/piSessionService.promptQueue.test.ts	2026-09-18 17:51:31.265955224 +0000
+@@ -1,12 +1,12 @@
+ import { mkdtemp, rm, writeFile } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+-import { createAssistantMessageEventStream, InMemoryCredentialStore, type AssistantMessage } from "@earendil-works/pi-ai";
++import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+ import type { StreamFn } from "@earendil-works/pi-agent-core";
+ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import { PiSessionService } from "./piSessionService.js";
+-import { CapturingSessionEventHub, createTestModelRuntime, fakeRuntime, runtimeCreator, seedCredential, sessionGateway, sessionRecord, sessionRef, TEST_MODEL_ID, TEST_MODEL_PROVIDER, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
++import { CapturingSessionEventHub, createTestModelRuntime, fakeRuntime, runtimeCreator, seedCredential, sessionGateway, sessionRecord, sessionRef, TEST_MODEL_ID, TEST_MODEL_PROVIDER, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+ 
+ const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
+ 
+@@ -88,28 +88,14 @@
+     await service.dispose();
+   });
+ 
+-  it("generates a session name for the first prompt via the session's agent.streamFunction", async () => {
+-    const model = testModel();
+-    const streamCalls: unknown[] = [];
+-    const streamFn: StreamFn = (streamModel, context, options) => {
+-      streamCalls.push({ streamModel, context, options });
+-      const stream = createAssistantMessageEventStream();
+-      const message: AssistantMessage = {
+-        role: "assistant",
+-        content: [{ type: "text", text: "Fix login bug" }],
+-        api: "anthropic-messages",
+-        provider: "anthropic",
+-        model: model.id,
+-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+-        stopReason: "stop",
+-        timestamp: Date.now(),
+-      };
+-      stream.push({ type: "done", reason: "stop", message });
+-      stream.end(message);
+-      return stream;
++  it("does not generate a session name for the first prompt", async () => {
++    let streamCalls = 0;
++    const streamFn: StreamFn = () => {
++      streamCalls += 1;
++      throw new Error("streamFunction must not be called by the prompt path");
+     };
+     const hub = new CapturingSessionEventHub();
+-    const fake = fakeRuntime("name-session", { model, agent: { streamFunction: streamFn } });
++    const fake = fakeRuntime("name-session", { agent: { streamFunction: streamFn } });
+     const service = new PiSessionService(hub, {
+       agentDir: TEST_AGENT_DIR,
+       modelRuntime: testModelRuntime,
+@@ -119,10 +105,45 @@
+     });
+ 
+     await service.prompt(sessionRef("name-session"), "Please fix the login bug");
+-    await vi.waitFor(() => { expect(fake.session.sessionName).toBe("Fix login bug"); });
+ 
+-    expect(streamCalls).toHaveLength(1);
+-    expect(hub.sessionEvents.some(({ event }) => event.type === "session.name" && event.name === "Fix login bug")).toBe(true);
++    expect(fake.calls.prompt).toEqual([
++      { text: "Please fix the login bug", options: undefined },
++    ]);
++    expect(streamCalls).toBe(0);
++    expect(fake.session.sessionName).toBeUndefined();
++    expect(hub.sessionEvents.some(({ event }) => event.type === "session.name"))
++      .toBe(false);
++    await service.dispose();
++  });
++
++  it("publishes native session name changes to session and global sockets", async () => {
++    const hub = new CapturingSessionEventHub();
++    const fake = fakeRuntime("name-session");
++    const service = new PiSessionService(hub, {
++      agentDir: TEST_AGENT_DIR,
++      modelRuntime: testModelRuntime,
++      createAgentRuntime: runtimeCreator(fake.runtime),
++      sessionManager: sessionGateway([sessionRecord("name-session")]),
++      heartbeatIntervalMs: 60_000,
++    });
++
++    await service.status(sessionRef("name-session"));
++    hub.sessionEvents.length = 0;
++    hub.globalEvents.length = 0;
++    fake.session.setSessionName("Agent title");
++    fake.emit({ type: "session_info_changed", name: "Agent title" });
++
++    const titleEvent = {
++      type: "session.name",
++      sessionId: "name-session",
++      name: "Agent title",
++    };
++    expect(hub.sessionEvents).toContainEqual({
++      sessionId: "name-session",
++      event: titleEvent,
++    });
++    expect(hub.globalEvents).toContainEqual(titleEvent);
++    expect(hub.sessionEvents.some(({ event }) => event.type === "pi.event")).toBe(false);
+     await service.dispose();
+   });
+ 
+diff -ruN -x .git a/src/server/sessions/piSessionService.ts b/src/server/sessions/piSessionService.ts
+--- a/src/server/sessions/piSessionService.ts	2026-09-18 17:51:30.997956465 +0000
++++ b/src/server/sessions/piSessionService.ts	2026-09-18 17:51:31.269955205 +0000
+@@ -37,7 +37,6 @@
+ import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
+ import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
+ import type { ActiveSession } from "./sessionRuntimeStore.js";
+-import { deterministicSessionName, fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
+ import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
+ import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
+ import { loadEffectiveProjectAttachmentsConfig } from "../workspaces/projectPiWebConfig.js";
+@@ -1160,7 +1159,6 @@
+   private readonly treeExclusiveRuntimeOperationCounts = new WeakMap<PiSessionRuntime, number>();
+   private readonly treeExclusiveSessionOperationCounts = new Map<string, number>();
+   private readonly deferredSubsessionNotifications = new WeakMap<PiAgentSession, DeferredSubsessionNotification[]>();
+-  private readonly deferredGeneratedSessionNames = new WeakMap<PiAgentSession, string>();
+   private readonly compactionPromptQueues = new Map<string, QueuedPrompt[]>();
+   private readonly compactionDrainTimers = new Map<string, NodeJS.Timeout>();
+   private readonly authLossWarnings = new Set<string>();
+@@ -2458,7 +2456,6 @@
+     await this.assertWritable(ref);
+     const session = await this.getOrOpen(ref);
+     this.assertTreeNavigationInactive(session, "send a prompt");
+-    this.maybeGenerateSessionName(session, promptText);
+     const isQueued = session.isStreaming || session.isCompacting;
+     const behavior = isQueued ? requestedBehavior ?? "followUp" : undefined;
+     if (isQueued && images.length === 0 && this.hasQueuedMessageText(session, promptText)) {
+@@ -2657,7 +2654,6 @@
+         this.flushDeferredTreeNavigationWork(session);
+         this.publishStatus(session);
+       } else {
+-        this.deferredGeneratedSessionNames.delete(session);
+         this.deferredSubsessionNotifications.delete(session);
+       }
+     }
+@@ -3797,9 +3793,13 @@
+       }
+     }
+     active.unsubscribe = session.subscribe((event) => {
+-      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
+-      this.publishActivityForEvent(session, event);
+       const eventType = getString(event, "type");
++      if (eventType === "session_info_changed") {
++        this.publishSessionName(session);
++      } else {
++        this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
++      }
++      this.publishActivityForEvent(session, event);
+       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
+       if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
+       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
+@@ -3869,49 +3869,7 @@
+     this.compactionDrainTimers.clear();
+   }
+ 
+-  private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
+-    if (session.sessionName !== undefined || session.messages.length !== 0 || session.isStreaming || session.isCompacting) return;
+-
+-    const deterministicName = deterministicSessionName(firstMessage);
+-    if (deterministicName !== undefined) {
+-      this.applyGeneratedSessionName(session, deterministicName);
+-      return;
+-    }
+-
+-    const model = session.model;
+-    if (model === undefined) return;
+-
+-    void generateShortSessionName(session.agent.streamFunction, model, firstMessage).then((name) => {
+-      this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
+-    }).catch(() => {
+-      this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
+-    });
+-  }
+-
+-  private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined): void {
+-    if (name === undefined || session.sessionName !== undefined) return;
+-    if (this.treeNavigations.has(session)) {
+-      this.deferredGeneratedSessionNames.set(session, name);
+-      return;
+-    }
+-    session.setSessionName(name);
+-    this.publishSessionName(session);
+-  }
+-
+   private flushDeferredTreeNavigationWork(session: PiAgentSession): void {
+-    const generatedName = this.deferredGeneratedSessionNames.get(session);
+-    this.deferredGeneratedSessionNames.delete(session);
+-    if (generatedName !== undefined) {
+-      try {
+-        this.applyGeneratedSessionName(session, generatedName);
+-      } catch (error: unknown) {
+-        this.logger.info(
+-          { sessionId: session.sessionId, error: error instanceof Error ? error.message : String(error) },
+-          "failed to apply deferred session name",
+-        );
+-      }
+-    }
+-
+     const notifications = this.deferredSubsessionNotifications.get(session) ?? [];
+     this.deferredSubsessionNotifications.delete(session);
+     for (const notification of notifications) {
+diff -ruN -x .git a/src/server/sessions/sessionNameGenerator.test.ts b/src/server/sessions/sessionNameGenerator.test.ts
+--- a/src/server/sessions/sessionNameGenerator.test.ts	2026-09-18 17:51:30.997956465 +0000
++++ b/src/server/sessions/sessionNameGenerator.test.ts	1970-01-01 00:00:00.000000000 +0000
+@@ -1,105 +0,0 @@
+-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+-import type { StreamFn } from "@earendil-works/pi-agent-core";
+-import { describe, expect, it } from "vitest";
+-import { cleanSessionName, deterministicSessionName, fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
+-
+-function fakeModel(): Model<Api> {
+-  return { id: "fake-model", name: "Fake Model", api: "anthropic-messages", provider: "anthropic", baseUrl: "https://example.test", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 };
+-}
+-
+-function fakeAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+-  return {
+-    role: "assistant",
+-    content: [],
+-    api: "anthropic-messages",
+-    provider: "anthropic",
+-    model: "fake-model",
+-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+-    stopReason: "stop",
+-    timestamp: Date.now(),
+-    ...overrides,
+-  };
+-}
+-
+-function streamThatCompletes(text: string): StreamFn {
+-  return () => {
+-    const stream = createAssistantMessageEventStream();
+-    const message = fakeAssistantMessage({ content: [{ type: "text", text }] });
+-    stream.push({ type: "done", reason: "stop", message });
+-    stream.end(message);
+-    return stream;
+-  };
+-}
+-
+-function streamThatErrors(): StreamFn {
+-  return () => {
+-    const stream = createAssistantMessageEventStream();
+-    const message = fakeAssistantMessage({ stopReason: "error", errorMessage: "boom" });
+-    stream.push({ type: "error", reason: "error", error: message });
+-    stream.end(message);
+-    return stream;
+-  };
+-}
+-
+-describe("sessionNameGenerator", () => {
+-  it("generates a session name by calling the injected streamFn", async () => {
+-    const calls: unknown[] = [];
+-    const stream = streamThatCompletes('Title: "Fix the bug"');
+-    const streamFn: StreamFn = (model, context, options) => {
+-      calls.push({ model, context, options });
+-      return stream(model, context, options);
+-    };
+-
+-    const name = await generateShortSessionName(streamFn, fakeModel(), "Please fix the login bug");
+-
+-    expect(name).toBe("Fix the bug");
+-    expect(calls).toHaveLength(1);
+-  });
+-
+-  it("returns undefined when the stream reports an error", async () => {
+-    const streamFn = streamThatErrors();
+-
+-    const name = await generateShortSessionName(streamFn, fakeModel(), "Please fix the login bug");
+-
+-    expect(name).toBeUndefined();
+-  });
+-
+-  it("cleans model-generated titles", () => {
+-    expect(cleanSessionName('Title: "Fix Session Naming."\nextra')).toBe("Fix Session Naming");
+-  });
+-
+-  it("builds deterministic names for relay handoff prompts", () => {
+-    expect(deterministicSessionName('Relay "handoff-check" leg 2 begins now.\n\nYou are the next runner.'))
+-      .toBe("Relay handoff-check leg 2");
+-  });
+-
+-  it.each(["R1a", "G-D1-L09", "phase-2", "R1-a"])("supports structured relay leg identifiers (%s)", (legIdentifier) => {
+-    expect(deterministicSessionName(`Relay "handoff-check" leg ${legIdentifier} begins now.`))
+-      .toBe(`Relay handoff-check leg ${legIdentifier}`);
+-  });
+-
+-  it("preserves the relay leg when truncating deterministic relay names", () => {
+-    expect(deterministicSessionName('Relay "very-long-relay-name-that-would-otherwise-push-the-leg-number-out-of-view" leg 42 begins now.'))
+-      .toBe("Relay very-long-relay-name-that-would-otherwise-push leg 42");
+-  });
+-
+-  it("does not build deterministic names for non-canonical relay prompts", () => {
+-    expect(deterministicSessionName('You are continuing Relay "handoff-check" under the Relay method.'))
+-      .toBeUndefined();
+-  });
+-
+-  it("builds a concise fallback from the first request", () => {
+-    expect(fallbackSessionName("Seems like auto name for sessions is not working, I still get the first message as a name."))
+-      .toBe("Seems like auto name for sessions");
+-  });
+-
+-  it("ignores skill blocks in fallback names", () => {
+-    expect(fallbackSessionName('<skill name="x" location="/x">\nDo x\n</skill>\n\nCheck the UI now'))
+-      .toBe("Check the UI now");
+-  });
+-
+-  it("skips fallback names when the first request is missing", () => {
+-    expect(fallbackSessionName(undefined)).toBeUndefined();
+-  });
+-});
+diff -ruN -x .git a/src/server/sessions/sessionNameGenerator.ts b/src/server/sessions/sessionNameGenerator.ts
+--- a/src/server/sessions/sessionNameGenerator.ts	2026-09-18 17:51:30.997956465 +0000
++++ b/src/server/sessions/sessionNameGenerator.ts	1970-01-01 00:00:00.000000000 +0000
+@@ -1,103 +0,0 @@
+-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+-import type { StreamFn } from "@earendil-works/pi-agent-core";
+-
+-const SESSION_NAME_TIMEOUT_MS = 10_000;
+-const SESSION_NAME_MAX_INPUT_CHARS = 4_000;
+-const SESSION_NAME_MAX_LENGTH = 60;
+-const FALLBACK_SESSION_NAME_MAX_WORDS = 6;
+-const RELAY_HANDOFF_FIRST_LINE = /^Relay\s+"([^"\n]+)"\s+leg\s+(\S+)\s+begins now\.?\s*(?:\n|$)/;
+-
+-export function deterministicSessionName(firstMessage: unknown): string | undefined {
+-  if (typeof firstMessage !== "string") return undefined;
+-
+-  return relayHandoffSessionName(firstMessage.trimStart());
+-}
+-
+-export async function generateShortSessionName<TApi extends Api>(streamFn: StreamFn, model: Model<TApi>, firstMessage: string): Promise<string | undefined> {
+-  const stream = await streamFn(
+-    model,
+-    {
+-      systemPrompt: "Generate a concise title for a coding-agent chat session. Return only the title, with no quotes or punctuation wrapper.",
+-      messages: [{
+-        role: "user",
+-        content: `Create a 2-6 word title for this request:\n\n${truncateInput(firstMessage)}`,
+-        timestamp: Date.now(),
+-      }],
+-    },
+-    {
+-      maxTokens: 24,
+-      reasoning: "minimal",
+-      signal: AbortSignal.timeout(SESSION_NAME_TIMEOUT_MS),
+-    },
+-  );
+-
+-  let streamedText = "";
+-  let finalMessage: AssistantMessage | undefined;
+-  for await (const event of stream) {
+-    if (event.type === "text_delta") streamedText += event.delta;
+-    if (event.type === "done") finalMessage = event.message;
+-    if (event.type === "error") return undefined;
+-  }
+-
+-  return cleanSessionName(finalMessage === undefined ? streamedText : textFromAssistant(finalMessage));
+-}
+-
+-export function fallbackSessionName(firstMessage: unknown): string | undefined {
+-  if (typeof firstMessage !== "string") return undefined;
+-
+-  return cleanSessionName(firstMessage
+-    .replace(/<skill name="[^"]+" location="[^"]+">[\s\S]*?<\/skill>/g, "")
+-    .replace(/```[\s\S]*?```/g, " ")
+-    .replace(/[`*_#[\](){}<>]/g, " ")
+-    .split(/\s+/)
+-    .filter(Boolean)
+-    .slice(0, FALLBACK_SESSION_NAME_MAX_WORDS)
+-    .join(" "));
+-}
+-
+-export function cleanSessionName(value: string): string | undefined {
+-  const title = (value.split("\n", 1)[0] ?? "")
+-    .replace(/^\s*(title|session title)\s*:\s*/i, "")
+-    .replace(/^\s*["'`]+|["'`.]+\s*$/g, "")
+-    .replace(/\s+/g, " ")
+-    .trim()
+-    .slice(0, SESSION_NAME_MAX_LENGTH)
+-    .trim();
+-  return title === "" ? undefined : title;
+-}
+-
+-function relayHandoffSessionName(firstMessage: string): string | undefined {
+-  const match = RELAY_HANDOFF_FIRST_LINE.exec(firstMessage);
+-  if (match === null) return undefined;
+-
+-  const relayName = match[1]?.replace(/\s+/g, " ").trim();
+-  const legIdentifier = match[2];
+-  if (relayName === undefined || relayName === "" || legIdentifier === undefined) return undefined;
+-
+-  return cleanSessionName(formatRelaySessionName(relayName, legIdentifier));
+-}
+-
+-function formatRelaySessionName(relayName: string, legIdentifier: string): string {
+-  const prefix = "Relay ";
+-  const suffix = ` leg ${legIdentifier}`;
+-  const maxRelayNameLength = Math.max(1, SESSION_NAME_MAX_LENGTH - prefix.length - suffix.length);
+-  const displayedRelayName = truncateRelayName(relayName, maxRelayNameLength);
+-  return `${prefix}${displayedRelayName}${suffix}`;
+-}
+-
+-function truncateRelayName(relayName: string, maxLength: number): string {
+-  if (relayName.length <= maxLength) return relayName;
+-  const truncated = relayName.slice(0, maxLength).replace(/[\s._-]+$/g, "").trim();
+-  return truncated === "" ? relayName.slice(0, maxLength).trim() : truncated;
+-}
+-
+-function textFromAssistant(message: AssistantMessage): string {
+-  return message.content
+-    .filter((part) => part.type === "text")
+-    .map((part) => part.text)
+-    .join("");
+-}
+-
+-function truncateInput(value: string): string {
+-  return value.length <= SESSION_NAME_MAX_INPUT_CHARS ? value : `${value.slice(0, SESSION_NAME_MAX_INPUT_CHARS)}…`;
+-}
