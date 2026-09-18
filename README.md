@@ -21,6 +21,36 @@
 - `005-server-message-id` – fix double model response on clock skew: probably fixed in upstream somehow
 - `006-tmux-clipboard` – workaround of builtin copy in TUI inside tmux window: stopped using tui, probably won't update
 
+## List of `patches/_pi-web/patches`
+
+- `001-prompt-send-chord` – bundled plugin sending the composer message on `Ctrl+Enter`
+- `002-chat-card-disclosure` – configurable disclosure (`none`/`live`/`last`/`all`) for thinking, skill, and tool-result/details/diff transcript cards
+  - `ui.disclosure.thinking` – `"none"` (default) | `"live"` | `"last"` | `"all"`
+  - `ui.disclosure.skillInvocation` – `"none"` (default) | `"live"` | `"last"` | `"all"`
+  - `ui.disclosure.toolResult` – `"none"` (default) | `"live"` | `"last"` | `"all"`
+  - `ui.disclosure.toolDetails` – `"none"` (default) | `"live"` | `"last"` | `"all"`
+  - `ui.disclosure.toolDiff` – `"none"` | `"live"` | `"last"` | `"all"` (default)
+- `003-events-group-disclosure` – configurable disclosure (`live`/`last`/`all`) for the summarizing events group card, without auto-collapsing it after work finishes
+  - `ui.disclosure.eventsGroup` – `"live"` (default) | `"last"` | `"all"` (`"none"` is not accepted)
+
+```json
+{
+  "ui": {
+    "disclosure": {
+      "thinking": "all",
+      "skillInvocation": "none",
+      "toolResult": "last",
+      "toolDetails": "none",
+      "toolDiff": "all",
+      "eventsGroup": "last"
+    }
+  }
+}
+```
+
+- `004-panel-collapse-persistence` – persist navigation/workspace panel collapsed state across tab reloads
+- `005-function-key-shortcuts` – allow lone function keys (`F1`-`F24`) as shortcut activators, not just Ctrl/Cmd/Alt chords
+
 ## List of issues
 
 - none yet

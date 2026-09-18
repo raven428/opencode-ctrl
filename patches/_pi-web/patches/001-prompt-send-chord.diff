@@ -1,0 +1,88 @@
+diff -ruN a/pi-web-plugins/prompt-send-chord/package.json b/pi-web-plugins/prompt-send-chord/package.json
+--- a/pi-web-plugins/prompt-send-chord/package.json	1970-01-01 00:00:00.000000000 +0000
++++ b/pi-web-plugins/prompt-send-chord/package.json	2026-09-18 11:56:03.246542875 +0000
+@@ -0,0 +1,9 @@
++{
++  "name": "@pi-web/prompt-send-chord-plugin",
++  "private": true,
++  "piWeb": {
++    "plugins": [
++      { "id": "prompt-send-chord", "browserRoot": ".", "module": "pi-web-plugin.js" }
++    ]
++  }
++}
+diff -ruN a/pi-web-plugins/prompt-send-chord/pi-web-plugin.ts b/pi-web-plugins/prompt-send-chord/pi-web-plugin.ts
+--- a/pi-web-plugins/prompt-send-chord/pi-web-plugin.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/pi-web-plugins/prompt-send-chord/pi-web-plugin.ts	2026-09-18 11:56:03.246542875 +0000
+@@ -0,0 +1,71 @@
++import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
++
++// Same key the host reads in promptEnterBehavior.ts; only that preference
++// makes the host send on Shift+Enter instead of inserting a newline.
++const PROMPT_ENTER_PREFERENCE_KEY = "pi-web.promptEnterPreference";
++
++function findFocusedPromptEditor(): Element | undefined {
++  let current: Element | null = document.activeElement;
++  let promptEditor: Element | undefined;
++  while (current !== null) {
++    if (current.localName === "prompt-editor") promptEditor = current;
++    const inner = current.shadowRoot?.activeElement;
++    if (inner === null || inner === undefined) break;
++    current = inner;
++  }
++  return promptEditor;
++}
++
++function hostSendsOnShiftEnter(): boolean {
++  try {
++    return window.localStorage.getItem(PROMPT_ENTER_PREFERENCE_KEY) === "newline";
++  } catch {
++    return false;
++  }
++}
++
++function sendViaButton(promptEditor: Element, event: KeyboardEvent): void {
++  const sendButton = promptEditor.shadowRoot?.querySelector("button.send-button");
++  if (!(sendButton instanceof HTMLButtonElement) || sendButton.disabled) return;
++  event.preventDefault();
++  event.stopPropagation();
++  sendButton.click();
++}
++
++function insertNewline(event: KeyboardEvent): void {
++  event.preventDefault();
++  event.stopPropagation();
++  document.execCommand("insertText", false, "\n");
++}
++
++function handleKeyDown(event: KeyboardEvent): void {
++  if (event.key !== "Enter" || event.isComposing) return;
++  if (event.altKey || event.repeat || event.defaultPrevented) return;
++  const isChord = (event.ctrlKey || event.metaKey) && !event.shiftKey;
++  const isPlainShift = event.shiftKey && !event.ctrlKey && !event.metaKey;
++  if (!isChord && !isPlainShift) return;
++  const promptEditor = findFocusedPromptEditor();
++  if (promptEditor === undefined) return;
++  if (isChord) {
++    sendViaButton(promptEditor, event);
++    return;
++  }
++  if (hostSendsOnShiftEnter()) insertNewline(event);
++}
++
++let activeListener: ((event: KeyboardEvent) => void) | undefined;
++
++const plugin: PiWebPlugin = {
++  apiVersion: 2,
++  name: "Prompt Send Chord",
++  activate: () => {
++    if (activeListener !== undefined) {
++      window.removeEventListener("keydown", activeListener, { capture: true });
++    }
++    activeListener = handleKeyDown;
++    window.addEventListener("keydown", activeListener, { capture: true });
++    return { contributions: {} };
++  },
++};
++
++export default plugin;
