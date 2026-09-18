@@ -155,6 +155,11 @@ jobs:
       - name: install dependencies
         working-directory: ${{ env.PI_WEB_REPO }}
         run: npm ci
+      # prepublishOnly (which ran verify/typecheck/lint) was removed above, so run
+      # the type check and lint explicitly to still catch issues in patched sources
+      - name: type check patched sources
+        working-directory: ${{ env.PI_WEB_REPO }}
+        run: npm run typecheck
       - name: publish package
         working-directory: ${{ env.PI_WEB_REPO }}
         env:
