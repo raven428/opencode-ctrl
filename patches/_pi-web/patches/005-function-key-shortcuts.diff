@@ -1,0 +1,142 @@
+diff -ruN a/docs/config.md b/docs/config.md
+--- a/docs/config.md	2026-09-18 12:19:08.298951365 +0000
++++ b/docs/config.md	2026-09-18 12:19:08.298951365 +0000
+@@ -455,17 +455,20 @@
+ 
+ ### Shortcut config
+ 
+-Shortcut values are keyed by action id. Values are shortcut strings such as `mod+k` or `mod+g p`; `null` disables that action's shortcut.
++Shortcut values are keyed by action id. Values are shortcut strings such as `mod+k`, `mod+g p`, or a lone function key `f1`-`f24`; `null` disables that action's shortcut.
+ 
+ ```json
+ {
+   "shortcuts": {
+     "core:view.chat": "mod+1",
+-    "core:session.stop": null
++    "core:session.stop": null,
++    "core:actions.show": "f1"
+   }
+ }
+ ```
+ 
++Assigning a function key suppresses the browser's own reaction to that key, but only once the shortcut is recognized: it stays inert while a modal dialog is open, and while another shortcut with the same key wins a conflict.
++
+ Prefer Settings → Keyboard for editing shortcuts interactively.
+ 
+ ### Chat card disclosure config
+diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/client/src/components/settings/SettingsShortcutsPanel.ts
+--- a/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:19:08.290951310 +0000
++++ b/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:19:08.294951337 +0000
+@@ -2,7 +2,7 @@
+ import { customElement, property, state } from "lit/decorators.js";
+ import type { AppAction } from "../../actions";
+ import type { PiWebConfigResponse, PiWebConfigValues, PiWebShortcutConfig } from "../../api";
+-import { formatShortcut, isShortcutSequenceStarter, parseShortcutInput, resolveShortcutBindings, shortcutPreferenceForAction, shortcutSequenceTimeoutMs, shortcutTokenFromEvent, type ShortcutBindingResolution } from "../../keyboardShortcuts";
++import { formatShortcut, isShortcutActivatorToken, parseShortcutInput, resolveShortcutBindings, shortcutPreferenceForAction, shortcutSequenceTimeoutMs, shortcutTokenFromEvent, type ShortcutBindingResolution } from "../../keyboardShortcuts";
+ import { readPromptEnterPreference, writePromptEnterPreference, type PromptEnterPreference } from "../../promptEnterBehavior";
+ import "./SettingsPanelFrame";
+ import type { SettingsNotice } from "./SettingsPanelFrame";
+@@ -33,7 +33,7 @@
+ ];
+ 
+ function renderShortcutsDescription(): TemplateResult {
+-  return html`Edit app shortcuts by action. Type a shortcut such as <code>mod+k</code> or <code>mod+g p</code>, record one from the keyboard, disable it with None, or reset it to the default. When shortcuts conflict, custom shortcuts win before defaults; ties are resolved by action id, and shorter shortcuts shadow longer sequences with the same prefix.`;
++  return html`Edit app shortcuts by action. Type a shortcut such as <code>mod+k</code>, <code>mod+g p</code>, or a single function key such as <code>f1</code>, record one from the keyboard, disable it with None, or reset it to the default. When shortcuts conflict, custom shortcuts win before defaults; ties are resolved by action id, and shorter shortcuts shadow longer sequences with the same prefix.`;
+ }
+ 
+ @customElement("settings-shortcuts-panel")
+@@ -69,8 +69,8 @@
+       this.localError = "Press a letter, number, punctuation, function, or navigation key. Press Esc to cancel recording.";
+       return;
+     }
+-    if (recording.tokens.length === 0 && !isShortcutSequenceStarter(token)) {
+-      this.localError = "Start shortcuts with Ctrl/⌘ or Alt so normal typing is not captured.";
++    if (recording.tokens.length === 0 && !isShortcutActivatorToken(token)) {
++      this.localError = "Start shortcuts with Ctrl/⌘, Alt, or a function key (F1-F24) so normal typing is not captured.";
+       return;
+     }
+ 
+@@ -231,7 +231,7 @@
+   private recordingHint(actionId: string): string {
+     const recording = this.recording;
+     if (recording?.actionId !== actionId) return "";
+-    if (recording.tokens.length === 0) return "Recording: press Ctrl/⌘ or Alt with a key. Press Esc to cancel.";
++    if (recording.tokens.length === 0) return "Recording: press Ctrl/⌘ or Alt with a key, or a function key alone. Press Esc to cancel.";
+     return `Recording: ${formatShortcut(recording.tokens.join(" "))}. Press another key to add a sequence, or wait to finish.`;
+   }
+ 
+diff -ruN a/src/client/src/keyboardShortcuts.ts b/src/client/src/keyboardShortcuts.ts
+--- a/src/client/src/keyboardShortcuts.ts	2026-09-18 12:19:08.286951281 +0000
++++ b/src/client/src/keyboardShortcuts.ts	2026-09-18 12:19:08.286951281 +0000
+@@ -4,6 +4,7 @@
+ 
+ const modifierOrder = ["mod", "alt", "shift"] as const;
+ type ShortcutModifier = typeof modifierOrder[number];
++const FUNCTION_KEY_PATTERN = /^f(?:[1-9]|1[0-9]|2[0-4])$/u;
+ 
+ export type ShortcutPreferenceConfig = Record<string, string | null>;
+ export type ShortcutBindingSource = "default" | "custom";
+@@ -59,8 +60,8 @@
+       const handledPending = this.handleSequence([...this.pendingTokens, token], shortcuts);
+       if (handledPending) return true;
+       this.clearPending();
+-      if (!isShortcutSequenceStarter(token)) return false;
+-    } else if (!isShortcutSequenceStarter(token)) return false;
++      if (!isShortcutActivatorToken(token)) return false;
++    } else if (!isShortcutActivatorToken(token)) return false;
+ 
+     return this.handleSequence([token], shortcuts);
+   }
+@@ -180,6 +181,14 @@
+   return token.split("+").includes("mod") || token.split("+").includes("alt");
+ }
+ 
++/** Whether a token may start a shortcut binding: a modifier chord, or a lone function key `F1`-`F24`. */
++export function isShortcutActivatorToken(token: string): boolean {
++  if (isShortcutSequenceStarter(token)) return true;
++  const parts = token.split("+");
++  const key = parts[parts.length - 1];
++  return key !== undefined && FUNCTION_KEY_PATTERN.test(key);
++}
++
+ function shortcutBindingForAction(action: AppAction, shortcuts: ShortcutPreferenceConfig | undefined, order: number): ShortcutBinding | undefined {
+   const configured = shortcutPreferenceForAction(action, shortcuts);
+   if (configured === null) return undefined;
+@@ -187,7 +196,7 @@
+   if (shortcut === undefined || shortcut === "") return undefined;
+   const tokens = normalizeShortcut(shortcut);
+   const firstToken = tokens[0];
+-  if (firstToken === undefined || !isShortcutSequenceStarter(firstToken)) return undefined;
++  if (firstToken === undefined || !isShortcutActivatorToken(firstToken)) return undefined;
+   return {
+     action,
+     shortcut: tokens.join(" "),
+@@ -251,8 +260,8 @@
+   for (const [index, chordInput] of chordInputs.entries()) {
+     const parsed = parseShortcutChord(chordInput);
+     if (!parsed.ok) return parsed;
+-    if (index === 0 && options.requireFirstChordActivator && !isShortcutSequenceStarter(parsed.token)) {
+-      return { ok: false, message: "Shortcuts must start with Ctrl/⌘ or Alt so normal typing is not captured." };
++    if (index === 0 && options.requireFirstChordActivator && !isShortcutActivatorToken(parsed.token)) {
++      return { ok: false, message: "Shortcuts must start with Ctrl/⌘, Alt, or a function key (F1-F24) so normal typing is not captured." };
+     }
+     tokens.push(parsed.token);
+   }
+@@ -314,7 +323,7 @@
+ function normalizeShortcutKeyName(key: string): string | undefined {
+   const alias = keyAlias(key);
+   if (alias !== undefined) return alias;
+-  if (/^f(?:[1-9]|1[0-9]|2[0-4])$/u.test(key)) return key;
++  if (FUNCTION_KEY_PATTERN.test(key)) return key;
+   if (key.length === 1) return key;
+   return undefined;
+ }
+@@ -399,7 +408,7 @@
+   if (part === "home") return "Home";
+   if (part === "end") return "End";
+   if (part === "plus") return "+";
+-  if (/^f(?:[1-9]|1[0-9]|2[0-4])$/u.test(part)) return part.toUpperCase();
++  if (FUNCTION_KEY_PATTERN.test(part)) return part.toUpperCase();
+   return part.length === 1 ? part.toUpperCase() : `${part.charAt(0).toUpperCase()}${part.slice(1)}`;
+ }
+ 

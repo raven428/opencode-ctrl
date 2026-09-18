@@ -1,0 +1,751 @@
+diff -ruN a/docs/config.md b/docs/config.md
+--- a/docs/config.md	2026-09-18 15:44:39.193101605 +0000
++++ b/docs/config.md	2026-09-18 15:47:25.017961403 +0000
+@@ -47,6 +47,7 @@
+ - `serverPlugins.safeStart`: persistent offline recovery state applied before server-plugin discovery/import on the next sessiond start; use the `pi-web plugins safe-start ...` CLI rather than hand-editing it.
+ - Pi package install/remove/update: not a PI WEB config key; after a mutation, type `/reload` in each idle PI WEB session on the target machine to refresh ordinary Pi resources such as extensions, skills, prompt templates, themes, and context/system prompt files. For a PI WEB package with `serverModule`, manually restart `pi-web-sessiond.service`, then reload the browser. If a global Pi extension adds or removes a model provider, or changes a provider's connection settings, the same manual sessiond restart is required; `/reload` cannot change either startup snapshot. A known Pi model provider refreshing only its own model list is applied without a restart. See [Pi extension provider baseline](#pi-extension-provider-baseline).
+ - `shortcuts`: saved settings apply in the browser after config refresh/save.
++- `ui.disclosure`: applies in the browser after settings save/config refresh; no service restart required.
+ 
+ ## Global config example
+ 
+@@ -76,6 +77,15 @@
+   "shortcuts": {
+     "core:view.chat": "mod+1",
+     "core:session.stop": null
++  },
++  "ui": {
++    "disclosure": {
++      "thinking": "all",
++      "skillInvocation": "none",
++      "toolResult": "last",
++      "toolDetails": "none",
++      "toolDiff": "all"
++    }
+   }
+ }
+ ```
+@@ -170,6 +180,7 @@
+ | PI WEB plugin desired enablement/settings | `plugins.<id>.enabled`, `plugins.<id>.settings` | — | Global + sessiond startup snapshot for server entries | Not core local config; plugins may read their own project files | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
+ | Server-plugin safe start | `serverPlugins.safeStart` | — | Global/offline recovery | Not supported locally; manage with `pi-web plugins safe-start ...` | Applied before discovery/import on next sessiond start |
+ | Keyboard shortcuts | `shortcuts.<actionId>` | — | Global | Not supported locally | Applies after settings save/config refresh |
++| Chat card disclosure | `ui.disclosure.<part>` | — | Global | Not supported locally | Applies after settings save/config refresh |
+ | Project config version | `version` | — | Project | Project-local only; must be `1` when present | Next project-config read |
+ | **Runtime-only environment variables** |  |  |  |  |  |
+ | Global config file path | — | `PI_WEB_CONFIG` (`XDG_CONFIG_HOME` affects the default path) | Process/env | Selects the global config file; not a project config | Restart services/processes after changing env |
+@@ -457,6 +468,39 @@
+ 
+ Prefer Settings → Keyboard for editing shortcuts interactively.
+ 
++### Chat card disclosure config
++
++`ui.disclosure` controls whether transcript cards start open or collapsed, independently for five part types: `thinking`, `skillInvocation`, `toolResult` (the tool execution result body, and the standalone result card for a tool call outside the loaded history page), `toolDetails` (the tool execution details body, showing the command/file/input target), and `toolDiff` (the tool execution diff body). Each accepts one of four modes:
++
++- `none`: closed. This is the default for every part except `toolDiff`.
++- `live`: the last card of that kind in the loaded transcript, but only while the session is active.
++- `last`: the last card of that kind in the loaded transcript, independent of session activity.
++- `all`: always open. This is the default for `toolDiff`.
++
++An empty or missing `ui.disclosure` reproduces the pre-existing UI behavior exactly. The `Result` card stays open regardless of mode when the tool execution errored; it now renders alongside a diff too, where the result text used to be hidden entirely. The `Details` card is not force-opened on error, since the error text lives in `Result`. A user can still collapse any card by clicking it in any mode.
++
++```json
++{
++  "ui": {
++    "disclosure": {
++      "thinking": "all",
++      "toolDetails": "all",
++      "toolResult": "last",
++      "toolDiff": "all",
++      "eventsGroup": "last"
++    }
++  }
++}
++```
++
++A sixth subkey, `eventsGroup`, controls the summarizing events group card shown for a run of tool/event messages. It accepts one of three modes (`none` is not a valid value here, since a fully collapsed card is already the default `live` outcome once work finishes):
++
++- `live` (default): the last events group in the loaded transcript stays open while its session is active, and collapses once work finishes. This reproduces the pre-existing behavior.
++- `last`: the last events group in the loaded transcript stays open regardless of session activity.
++- `all`: every events group in the transcript stays open. On a long session history this renders substantially more DOM, since a group's body is only rendered while open.
++
++For `eventsGroup`, `last` and `live` target the last group of events in the loaded transcript, not the last entry of the transcript overall. The `live` class and `live events` label are shown only for the most recent group of an active session, independent of the chosen mode. Manual collapsing/expanding is remembered per group in any mode. Because this release also changes the storage key events groups use to persist their disclosure state, every previously saved group disclosure choice resets once after upgrading.
++
+ ## Prompt completions
+ 
+ The chat composer opens completion menus on three trigger characters:
+diff -ruN a/src/client/src/api/parsers.ts b/src/client/src/api/parsers.ts
+--- a/src/client/src/api/parsers.ts	2026-09-18 15:44:39.209101661 +0000
++++ b/src/client/src/api/parsers.ts	2026-09-18 15:47:25.021961415 +0000
+@@ -1,4 +1,4 @@
+-import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, EXTENSION_DIALOG_OPTION_LIMIT, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type PendingExtensionDialog, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogKind, type ExtensionDialogOutcome, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GlobalSessionEvent, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebDeprecatedAgentInput, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelCatalogResponse, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type ServerNotice, type ServerNoticeEvent, type ServerNoticeSeverity, type ServerNoticeSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionUiEvent, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type TerminalUiEvent, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceEffectiveConfig, type WorkspaceTrustResponse } from "../../../shared/apiTypes";
++import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, EXTENSION_DIALOG_OPTION_LIMIT, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type PendingExtensionDialog, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogKind, type ExtensionDialogOutcome, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GlobalSessionEvent, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebDeprecatedAgentInput, type PiWebDisclosureConfig, type PiWebDisclosureMode, type PiWebGroupDisclosureMode, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type PiWebUiConfig, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelCatalogResponse, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type ServerNotice, type ServerNoticeEvent, type ServerNoticeSeverity, type ServerNoticeSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionUiEvent, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type TerminalUiEvent, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceEffectiveConfig, type WorkspaceTrustResponse } from "../../../shared/apiTypes";
+ import { parseMachineStatusSnapshot, type MachineStatusSnapshot, type MachineStatusUiEvent } from "../../../shared/machineStatus";
+ import type { JsonValue, PiPackageInfo, PiPackageInstallableSuggestion, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier } from "../../../shared/apiTypes";
+ 
+@@ -1500,6 +1500,7 @@
+     ...optionalField("port", optionalNumber(record, "port")),
+     ...optionalField("allowedHosts", optionalAllowedHosts(record["allowedHosts"])),
+     ...optionalField("shortcuts", optionalShortcuts(record["shortcuts"])),
++    ...optionalField("ui", optionalUi(record["ui"])),
+     ...optionalField("plugins", optionalPlugins(record["plugins"])),
+     ...optionalField("pathAccess", optionalPathAccess(record["pathAccess"])),
+     ...optionalField("uploads", optionalUploads(record["uploads"])),
+@@ -1576,6 +1577,39 @@
+   }));
+ }
+ 
++const DISCLOSURE_MODES = ["none", "live", "last", "all"] as const satisfies readonly PiWebDisclosureMode[];
++const DISCLOSURE_KEYS = ["thinking", "skillInvocation", "toolResult", "toolDetails", "toolDiff"] as const satisfies readonly Exclude<keyof PiWebDisclosureConfig, "eventsGroup">[];
++const GROUP_DISCLOSURE_MODES = ["live", "last", "all"] as const satisfies readonly PiWebGroupDisclosureMode[];
++
++function optionalUi(value: unknown): PiWebUiConfig | undefined {
++  if (value === undefined) return undefined;
++  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB ui field");
++  for (const key of Object.keys(value)) {
++    if (key !== "disclosure") throw new Error("Invalid PI WEB ui field");
++  }
++  const disclosure = value["disclosure"];
++  return {
++    ...optionalField("disclosure", optionalDisclosure(disclosure)),
++  };
++}
++
++function optionalDisclosure(value: unknown): PiWebDisclosureConfig | undefined {
++  if (value === undefined) return undefined;
++  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB ui field");
++  const result: PiWebDisclosureConfig = {};
++  for (const [key, mode] of Object.entries(value)) {
++    if (key === "eventsGroup") {
++      if (!GROUP_DISCLOSURE_MODES.includes(mode as typeof GROUP_DISCLOSURE_MODES[number])) throw new Error("Invalid PI WEB ui field");
++      result.eventsGroup = mode as PiWebGroupDisclosureMode;
++      continue;
++    }
++    if (!DISCLOSURE_KEYS.includes(key as typeof DISCLOSURE_KEYS[number])) throw new Error("Invalid PI WEB ui field");
++    if (!DISCLOSURE_MODES.includes(mode as typeof DISCLOSURE_MODES[number])) throw new Error("Invalid PI WEB ui field");
++    result[key as typeof DISCLOSURE_KEYS[number]] = mode as PiWebDisclosureMode;
++  }
++  return result;
++}
++
+ function optionalPlugins(value: unknown): PiWebPluginConfigMap | undefined {
+   if (value === undefined) return undefined;
+   if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB plugins field");
+diff -ruN a/src/client/src/api.ts b/src/client/src/api.ts
+--- a/src/client/src/api.ts	2026-09-18 15:44:39.209101661 +0000
++++ b/src/client/src/api.ts	2026-09-18 15:47:25.025961428 +0000
+@@ -5,5 +5,5 @@
+ export { DEFAULT_WORKSPACE_ATTACHMENTS_FOLDER, effectiveWorkspaceAttachmentsFolder, workspaceEffectiveAttachmentsFolder } from "./api/workspaceAttachments";
+ export type { WorkspaceAttachmentsFolderConfig } from "./api/workspaceAttachments";
+ export type { UploadWorkspaceFileOptions, UploadWorkspaceFilesOptions, WorkspaceFileUploadProgress, WorkspaceUploadBatchFileProgress, WorkspaceUploadBatchProgress, WorkspaceUploadFileFailure, WorkspaceUploadFileInput, WorkspaceUploadFolderConfig, WorkspaceUploadTask, WorkspaceUploadXhr, WorkspaceUploadXhrFactory } from "./api/workspaceUploads";
+-export type { ArchiveSessionsResponse, AskUserCloseResponse, AskUserQuestion, AskUserSubmission, PendingAskUser, PendingExtensionDialog, AuthProviderOption, AuthProviderStatus, AuthProvidersResponse, AuthStatusSource, AuthType, CommandOption, CommandResult, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, ExtensionDialogCloseReason, ExtensionDialogCloseResponse, ExtensionDialogKind, ExtensionDialogOutcome, FileContentMediaType, FileContentResponse, FileSuggestion, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, Machine, MachineHealth, MachineKind, MachineRuntime, MachineStatus, MessagePage, ModelSelectionResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, OAuthFlowState, PiPackageInfo, PiPackageInstallableSuggestion, PiPackageInstallRequest, PiPackageMutationAction, PiPackageMutationResponse, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiPackagesResponse, PiWebCapability, PiWebComponentStatus, PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues, PiWebDeprecatedAgentInput, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebPluginConfig, PiWebPluginConfigMap, PiWebPluginInfo, PiWebPluginsResponse, PiWebPluginScope, PiWebPluginSettings, PiWebReleaseStatus, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebShortcutConfig, PiWebStatusMessage, PiWebStatusResponse, PiWebUploadsConfig, Project, PromptAttachment, QueuedSessionMessage, RealtimeEvent, RunTerminalCommandInput, SavedPromptAttachment, SessionActivity, SessionBulkArchiveResponse, SessionBulkDeleteArchivedResponse, SessionBulkFailure, SessionBulkMutationRef, SessionBulkMutationRequest, SessionCleanupExecuteResponse, SessionCleanupPreviewResponse, SessionCleanupProjectSummary, SessionCleanupRequest, SessionCleanupThresholds, SessionCleanupTotals, SessionInfo, SessionModel, SessionModelCatalogEntry, SessionModelCatalogResponse, SessionModelScopeMode, ServerNotice, ServerNoticeDismissRequest, ServerNoticeEvent, ServerNoticeSeverity, ServerNoticeSnapshot, SessionRef, SessionStatus, SessionStreamSnapshot, SessionUnreadAcknowledgeRequest, SessionUnreadCatalogSnapshot, SessionUnreadEvent, SessionUnreadSummary, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice, SessionWarning, SessionWarningSeverity, SlashCommand, SessionUiEvent, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, TerminalCommandRunStatus, TerminalInfo, TerminalUiEvent, ThinkingLevel, ThinkingLevelsResponse, WorkspaceProviderCapabilities, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderMetadata, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier, WorkspaceRemovalPresentation, WorkspaceRemovalRequest, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace, WorkspaceTrustResponse } from "../../shared/apiTypes";
++export type { ArchiveSessionsResponse, AskUserCloseResponse, AskUserQuestion, AskUserSubmission, PendingAskUser, PendingExtensionDialog, AuthProviderOption, AuthProviderStatus, AuthProvidersResponse, AuthStatusSource, AuthType, CommandOption, CommandResult, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, ExtensionDialogCloseReason, ExtensionDialogCloseResponse, ExtensionDialogKind, ExtensionDialogOutcome, FileContentMediaType, FileContentResponse, FileSuggestion, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, Machine, MachineHealth, MachineKind, MachineRuntime, MachineStatus, MessagePage, ModelSelectionResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, OAuthFlowState, PiPackageInfo, PiPackageInstallableSuggestion, PiPackageInstallRequest, PiPackageMutationAction, PiPackageMutationResponse, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiPackagesResponse, PiWebCapability, PiWebComponentStatus, PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues, PiWebDeprecatedAgentInput, PiWebDisclosureConfig, PiWebDisclosureMode, PiWebDockerMode, PiWebGroupDisclosureMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebPluginConfig, PiWebPluginConfigMap, PiWebPluginInfo, PiWebPluginsResponse, PiWebPluginScope, PiWebPluginSettings, PiWebReleaseStatus, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebShortcutConfig, PiWebStatusMessage, PiWebStatusResponse, PiWebUiConfig, PiWebUploadsConfig, Project, PromptAttachment, QueuedSessionMessage, RealtimeEvent, RunTerminalCommandInput, SavedPromptAttachment, SessionActivity, SessionBulkArchiveResponse, SessionBulkDeleteArchivedResponse, SessionBulkFailure, SessionBulkMutationRef, SessionBulkMutationRequest, SessionCleanupExecuteResponse, SessionCleanupPreviewResponse, SessionCleanupProjectSummary, SessionCleanupRequest, SessionCleanupThresholds, SessionCleanupTotals, SessionInfo, SessionModel, SessionModelCatalogEntry, SessionModelCatalogResponse, SessionModelScopeMode, ServerNotice, ServerNoticeDismissRequest, ServerNoticeEvent, ServerNoticeSeverity, ServerNoticeSnapshot, SessionRef, SessionStatus, SessionStreamSnapshot, SessionUnreadAcknowledgeRequest, SessionUnreadCatalogSnapshot, SessionUnreadEvent, SessionUnreadSummary, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice, SessionWarning, SessionWarningSeverity, SlashCommand, SessionUiEvent, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, TerminalCommandRunStatus, TerminalInfo, TerminalUiEvent, ThinkingLevel, ThinkingLevelsResponse, WorkspaceProviderCapabilities, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderMetadata, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier, WorkspaceRemovalPresentation, WorkspaceRemovalRequest, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace, WorkspaceTrustResponse } from "../../shared/apiTypes";
+ 
+diff -ruN a/src/client/src/chatDisclosureModes.ts b/src/client/src/chatDisclosureModes.ts
+--- a/src/client/src/chatDisclosureModes.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/client/src/chatDisclosureModes.ts	2026-09-18 15:47:25.029961440 +0000
+@@ -0,0 +1,89 @@
++import type { PiWebDisclosureConfig, PiWebDisclosureMode, PiWebGroupDisclosureMode } from "./api";
++import type { ChatGroup } from "./chatGroups";
++import type { ChatPart } from "./components/shared";
++
++export type PiWebPartDisclosureKind = Exclude<keyof PiWebDisclosureConfig, "eventsGroup">;
++
++export const DEFAULT_CHAT_DISCLOSURE_MODES: Required<PiWebDisclosureConfig> = {
++  thinking: "none",
++  skillInvocation: "none",
++  toolResult: "none",
++  toolDetails: "none",
++  toolDiff: "all",
++  eventsGroup: "live",
++};
++
++export function chatDisclosureMode(config: PiWebDisclosureConfig, kind: PiWebPartDisclosureKind): PiWebDisclosureMode {
++  return config[kind] ?? DEFAULT_CHAT_DISCLOSURE_MODES[kind];
++}
++
++export function chatCardKey(messageIndex: number, partIndex: number): string {
++  return `${String(messageIndex)}:${String(partIndex)}`;
++}
++
++/** The disclosure kinds one transcript part can render a card for. */
++export function partDisclosureKinds(part: ChatPart): PiWebPartDisclosureKind[] {
++  if (part.type === "thinking") return ["thinking"];
++  if (part.type === "skillInvocation") return ["skillInvocation"];
++  if (part.type === "toolExecution") return ["toolDetails", "toolDiff", "toolResult"];
++  if (part.type === "toolResult") return ["toolResult"];
++  return [];
++}
++
++/** The last card of every kind in render order, which `last` and `live` target. */
++export function lastDisclosureCards(groups: ChatGroup[]): Map<PiWebPartDisclosureKind, string> {
++  const lastCards = new Map<PiWebPartDisclosureKind, string>();
++  const visit = (parts: ChatPart[], messageIndex: number) => {
++    parts.forEach((part, partIndex) => {
++      for (const kind of partDisclosureKinds(part)) lastCards.set(kind, chatCardKey(messageIndex, partIndex));
++    });
++  };
++  for (const group of groups) {
++    if (group.kind !== "group") {
++      visit(group.message.parts, group.index);
++      continue;
++    }
++    group.messages.forEach((message, offset) => { visit(message.parts, group.startIndex + offset); });
++  }
++  return lastCards;
++}
++
++export interface ChatCardOpenOptions {
++  config: PiWebDisclosureConfig;
++  kind: PiWebPartDisclosureKind;
++  isLastCard: boolean;
++  isSessionLive: boolean;
++  forceOpen?: boolean;
++}
++
++export function chatCardOpen(options: ChatCardOpenOptions): boolean {
++  if (options.forceOpen === true) return true;
++  const mode = chatDisclosureMode(options.config, options.kind);
++  if (mode === "all") return true;
++  if (mode === "last") return options.isLastCard;
++  if (mode === "live") return options.isLastCard && options.isSessionLive;
++  return false;
++}
++
++export function eventsGroupDisclosureMode(config: PiWebDisclosureConfig): PiWebGroupDisclosureMode {
++  return config.eventsGroup ?? DEFAULT_CHAT_DISCLOSURE_MODES.eventsGroup;
++}
++
++/** Position of the last events group; -1 when the transcript has none. */
++export function lastEventsGroupIndex(groups: ChatGroup[]): number {
++  let lastIndex = -1;
++  groups.forEach((group, index) => { if (group.kind === "group") lastIndex = index; });
++  return lastIndex;
++}
++
++export interface GroupDisclosureOpenOptions {
++  mode: PiWebGroupDisclosureMode;
++  isLastGroup: boolean;
++  isSessionLive: boolean;
++}
++
++export function groupDisclosureOpen(options: GroupDisclosureOpenOptions): boolean {
++  if (options.mode === "all") return true;
++  if (options.mode === "last") return options.isLastGroup;
++  return options.isLastGroup && options.isSessionLive;
++}
+diff -ruN a/src/client/src/components/ChatView.ts b/src/client/src/components/ChatView.ts
+--- a/src/client/src/components/ChatView.ts	2026-09-18 15:44:39.217101689 +0000
++++ b/src/client/src/components/ChatView.ts	2026-09-18 15:47:25.033961452 +0000
+@@ -2,12 +2,13 @@
+ import { customElement, property, query, state } from "lit/decorators.js";
+ import { repeat } from "lit/directives/repeat.js";
+ import { ChatDisclosureController } from "../chatDisclosure";
++import { chatCardKey, chatCardOpen, eventsGroupDisclosureMode, groupDisclosureOpen, lastDisclosureCards, lastEventsGroupIndex, type PiWebPartDisclosureKind } from "../chatDisclosureModes";
+ import { groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
+ import { writeClipboardText } from "../clipboard";
+ import { capturePrependScrollAnchor, PREPEND_RESTORE_SETTLE_FRAMES, restorePrependScrollAnchor, type PrependScrollAnchor } from "../chatScrollAnchoring";
+ import { shouldRequestEarlierMessages } from "../chatHistoryLoading";
+ import { ChatScrollController, distanceFromScrollBottom, findFirstVisibleArticle, isNearScrollBottom, type ChatAnchorScrollPosition, type ChatScrollRestoreResult } from "../chatScrollPosition";
+-import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionStatus, SessionWarningSeverity } from "../api";
++import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, PiWebDisclosureConfig, QueuedSessionMessage, SessionActivity, SessionStatus, SessionWarningSeverity } from "../api";
+ import type { ClosedExtensionDialog } from "../appState";
+ import {
+   notificationAnnouncementLabel,
+@@ -124,13 +125,13 @@
+ }
+ 
+ /** The CSS class list for an event-group `<details>`, distinguishing the live tail. */
+-export function chatMessageGroupClassName(defaultOpen: boolean): string {
+-  return defaultOpen ? "msg event-group live" : "msg event-group";
++export function chatMessageGroupClassName(isLiveTail: boolean): string {
++  return isLiveTail ? "msg event-group live" : "msg event-group";
+ }
+ 
+ /** The disclosure summary label for an event group, distinguishing the live tail. */
+-export function chatMessageGroupLabel(defaultOpen: boolean): string {
+-  return defaultOpen ? "live events" : "events";
++export function chatMessageGroupLabel(isLiveTail: boolean): string {
++  return isLiveTail ? "live events" : "events";
+ }
+ 
+ /** Whether a queued-message section shows the server clear-queue action. */
+@@ -213,6 +214,7 @@
+   @property({ type: Boolean }) warningsVisible = true;
+   @property({ attribute: false }) onToggleWarnings?: () => void;
+   @property({ attribute: false }) onLoadMore?: () => void;
++  @property({ attribute: false }) disclosureModes: PiWebDisclosureConfig = {};
+   @query(".chat") private chat?: HTMLDivElement;
+   @query("dialog.image-zoom") private imageZoomDialog?: HTMLDialogElement;
+   @state() private pinnedToBottom = true;
+@@ -236,6 +238,7 @@
+   private groupedMessagesInput?: ChatLine[];
+   private groupedMessagesStart = 0;
+   private groupedMessagesCache: ChatGroup[] = [];
++  private lastDisclosureCardsCache = new Map<PiWebPartDisclosureKind, string>();
+   private readonly messageMetaCache = new WeakMap<ChatLine, string>();
+   private readonly messageCopyTextCache = new WeakMap<ChatLine, string>();
+   private lastScrollTop = 0;
+@@ -413,6 +416,7 @@
+ 
+   override render() {
+     const groups = this.groupedMessages();
++    const lastGroupIndex = lastEventsGroupIndex(groups);
+     return html`
+       ${this.renderTopNotices()}
+       ${this.renderNotificationLiveRegions()}
+@@ -424,7 +428,7 @@
+             groups,
+             (group) => group.kind === "group" ? this.groupRenderKey(group.startIndex) : this.messageAnchorKey(group.index),
+             (group, index) => {
+-              if (group.kind === "group") return this.renderMessageGroup(group.messages, group.startIndex, group.endIndex, this.isLiveTailGroup(groups, index));
++              if (group.kind === "group") return this.renderMessageGroup(group.messages, group.startIndex, group.endIndex, this.groupDisclosureDefaultOpen(index, lastGroupIndex), this.isLiveTailGroup(groups, index));
+               if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, group.toolName);
+               return this.renderMessage(group.message, group.index);
+             },
+@@ -643,6 +647,7 @@
+     this.groupedMessagesInput = this.messages;
+     this.groupedMessagesStart = this.messageStart;
+     this.groupedMessagesCache = groupChatMessages(this.messages, this.messageStart);
++    this.lastDisclosureCardsCache = lastDisclosureCards(this.groupedMessagesCache);
+     return this.groupedMessagesCache;
+   }
+ 
+@@ -650,6 +655,14 @@
+     return index === groups.length - 1 && this.isSessionLive();
+   }
+ 
++  private groupDisclosureDefaultOpen(index: number, lastGroupIndex: number): boolean {
++    return groupDisclosureOpen({
++      mode: eventsGroupDisclosureMode(this.disclosureModes),
++      isLastGroup: index === lastGroupIndex,
++      isSessionLive: this.isSessionLive(),
++    });
++  }
++
+   private isSessionLive(): boolean {
+     return this.isSendingPrompt
+       || this.status?.isStreaming === true
+@@ -658,6 +671,21 @@
+       || this.activity?.phase === "active";
+   }
+ 
++  private lastCardKey(kind: PiWebPartDisclosureKind): string | undefined {
++    this.groupedMessages();
++    return this.lastDisclosureCardsCache.get(kind);
++  }
++
++  private partOpen(kind: PiWebPartDisclosureKind, cardKey: string, forceOpen = false): boolean {
++    return chatCardOpen({
++      config: this.disclosureModes,
++      kind,
++      isLastCard: this.lastCardKey(kind) === cardKey,
++      isSessionLive: this.isSessionLive(),
++      forceOpen,
++    });
++  }
++
+   private renderActivityDock() {
+     if (this.isSendingPrompt) {
+       return html`
+@@ -832,7 +860,7 @@
+       ${this.renderScrollMarker(this.messageScrollMarkerId(index))}
+       <article class=${toolOnly || askUserRecordOnly ? shellClass : `msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
+         ${toolOnly || askUserRecordOnly ? null : this.renderMessageHeader(message, String(index))}
+-        ${message.parts.map((part) => this.renderPart(part, message))}
++        ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
+       </article>
+     `;
+   }
+@@ -843,7 +871,7 @@
+       ${this.renderScrollMarker(this.messageScrollMarkerId(index))}
+       <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
+         ${this.renderMessageHeader(message, String(index), label)}
+-        ${message.parts.map((part) => this.renderPart(part, message))}
++        ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
+       </article>
+     `;
+   }
+@@ -856,14 +884,14 @@
+     return message.parts.length > 0 && message.parts.every((part) => part.type === "askUserRecord");
+   }
+ 
+-  private renderMessageGroup(messages: ChatLine[], startIndex: number, endIndex: number, defaultOpen: boolean) {
+-    const disclosureKey = this.groupDisclosureKey(startIndex, endIndex, defaultOpen);
++  private renderMessageGroup(messages: ChatLine[], startIndex: number, endIndex: number, defaultOpen: boolean, isLiveTail: boolean) {
++    const disclosureKey = this.groupDisclosureKey(startIndex);
+     const open = this.disclosures.isOpen(disclosureKey, defaultOpen);
+     return html`
+       ${this.renderScrollMarker(this.groupScrollMarkerId(endIndex))}
+-      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(startIndex)} ?open=${open} @toggle=${(event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); }}>
++      <details class=${chatMessageGroupClassName(isLiveTail)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(startIndex)} ?open=${open} @toggle=${(event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); }}>
+         <summary>
+-          <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
++          <b class="label">${chatMessageGroupLabel(isLiveTail)}</b>
+           <span>${summarizeChatGroup(messages)}</span>
+         </summary>
+         ${open ? this.renderMessageGroupBody(messages, startIndex) : null}
+@@ -879,7 +907,7 @@
+           return html`
+             <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${startIndex + offset} data-scroll-anchor-id=${this.eventAnchorKey(startIndex + offset)}>
+               ${toolOnly ? null : this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`)}
+-              ${message.parts.map((part) => this.renderPart(part, message))}
++              ${message.parts.map((part, partIndex) => this.renderPart(part, message, startIndex + offset, partIndex))}
+             </section>
+           `;
+         })}
+@@ -958,12 +986,13 @@
+     return label;
+   }
+ 
+-  private renderPart(part: ChatPart, message?: ChatLine) {
++  private renderPart(part: ChatPart, message: ChatLine | undefined, index: number, partIndex: number) {
++    const cardKey = chatCardKey(index, partIndex);
+     if (part.type === "text" && message?.role === "bash") return html`<pre class="part shell-output">${part.text}</pre>`;
+     if (part.type === "text") return html`<formatted-text class="part" .text=${part.text}></formatted-text>`;
+-    if (part.type === "thinking") return html`<details class="part"><summary>thinking</summary><formatted-text .text=${part.text}></formatted-text></details>`;
++    if (part.type === "thinking") return html`<details class="part" ?open=${this.partOpen("thinking", cardKey)}><summary>thinking</summary><formatted-text .text=${part.text}></formatted-text></details>`;
+     if (part.type === "skillInvocation") return html`
+-      <details class="part skill-invocation">
++      <details class="part skill-invocation" ?open=${this.partOpen("skillInvocation", cardKey)}>
+         <summary><b>[skill]</b> ${part.name}</summary>
+         <small>${part.location}</small>
+         <formatted-text .text=${part.content}></formatted-text>
+@@ -987,9 +1016,9 @@
+       return html`<img class="part chat-image" src=${src} alt=${alt} loading="lazy" role="button" tabindex="0" title="Click to enlarge" @load=${this.onImageLoad} @click=${() => { this.openImageZoom(src, alt); }} @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openImageZoom(src, alt); } }} />`;
+     }
+     if (part.type === "toolCall") return html`<div class="part tool-line">▶ ${part.toolName}<span class="summary">${part.summary}</span></div>`;
+-    if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part}></tool-execution-view>`;
++    if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part} .detailsOpen=${this.partOpen("toolDetails", cardKey)} .resultOpen=${this.partOpen("toolResult", cardKey)} .diffOpen=${this.partOpen("toolDiff", cardKey)}></tool-execution-view>`;
+     if (part.type === "toolResult") return html`
+-      <details class="part" ?open=${part.isError}>
++      <details class="part" ?open=${this.partOpen("toolResult", cardKey, part.isError)}>
+         <summary>${part.isError ? "✖" : "✓"} ${part.toolName} result</summary>
+         <formatted-text .text=${part.text}></formatted-text>
+       </details>
+@@ -1340,8 +1369,8 @@
+     });
+   }
+ 
+-  private groupDisclosureKey(startIndex: number, endIndex: number, defaultOpen: boolean): string {
+-    return defaultOpen ? `${this.sessionId}:live:${String(startIndex)}` : `${this.sessionId}:${String(endIndex)}`;
++  private groupDisclosureKey(startIndex: number): string {
++    return `${this.sessionId}:group:${String(startIndex)}`;
+   }
+ 
+   private messageAnchorKey(index: number): string {
+diff -ruN a/src/client/src/components/PiWebApp.ts b/src/client/src/components/PiWebApp.ts
+--- a/src/client/src/components/PiWebApp.ts	2026-09-18 15:44:39.221101703 +0000
++++ b/src/client/src/components/PiWebApp.ts	2026-09-18 15:47:25.037961465 +0000
+@@ -1,6 +1,6 @@
+ import { LitElement, html, type TemplateResult } from "lit";
+ import { customElement, query, state } from "lit/decorators.js";
+-import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
++import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebDisclosureConfig, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+ import type { AppAction } from "../actions";
+ import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
+ import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
+@@ -255,6 +255,7 @@
+   @state() private sessionCleanupDialog: SessionCleanupDialogState | undefined;
+   @state() private settingsSection: SettingsSection | undefined = readSettingsSection();
+   @state() private shortcutConfig: PiWebShortcutConfig = {};
++  @state() private uiDisclosure: PiWebDisclosureConfig = {};
+   @state() private workspaceUploadDefaultFolder = effectiveWorkspaceUploadFolder(undefined);
+   @state() private workspaceAttachmentsDefaultFolder = effectiveWorkspaceAttachmentsFolder(undefined);
+   private sessionWarningVisibility = initialSessionWarningVisibilityState();
+@@ -514,6 +515,7 @@
+ 
+   private applyClientConfig(config: PiWebConfigValues): void {
+     this.shortcutConfig = config.shortcuts ?? {};
++    this.uiDisclosure = config.ui?.disclosure ?? {};
+     this.workspaceUploadDefaultFolder = effectiveWorkspaceUploadFolder(config);
+     this.workspaceAttachmentsDefaultFolder = effectiveWorkspaceAttachmentsFolder(config);
+   }
+@@ -2239,7 +2241,7 @@
+ 
+   private renderChatView(state: AppState, session: SessionInfo) {
+     return html`
+-      <chat-view .sessionId=${session.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? []} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${selectedNotificationView(state.selectedNotificationInbox)} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${() => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages())}></chat-view>
++      <chat-view .sessionId=${session.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? []} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${selectedNotificationView(state.selectedNotificationInbox)} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${() => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages())} .disclosureModes=${this.uiDisclosure}></chat-view>
+     `;
+   }
+ 
+diff -ruN a/src/client/src/components/ToolExecutionView.ts b/src/client/src/components/ToolExecutionView.ts
+--- a/src/client/src/components/ToolExecutionView.ts	2026-09-18 15:44:39.225101717 +0000
++++ b/src/client/src/components/ToolExecutionView.ts	2026-09-18 15:47:25.041961478 +0000
+@@ -13,9 +13,11 @@
+ @customElement("tool-execution-view")
+ export class ToolExecutionView extends LitElement {
+   @property({ attribute: false }) execution: ToolExecutionPart | undefined;
++  @property({ attribute: false }) diffOpen = true;
++  @property({ attribute: false }) detailsOpen = false;
++  @property({ attribute: false }) resultOpen = false;
+   @state() private showFullDiff = false;
+   @state() private copied = false;
+-  @state() private diffOpen = true;
+ 
+   override render() {
+     const execution = this.execution;
+@@ -28,7 +30,6 @@
+     const diffStats = visibleDiff === undefined ? undefined : countDiffLines(visibleDiff);
+     const previewMismatch = actualDiff !== undefined && preview?.diff !== undefined && actualDiff !== preview.diff;
+     const errorText = execution.status === "error" ? execution.resultText : preview?.error;
+-    const bodyText = visibleDiff === undefined ? execution.resultText : undefined;
+     const target = toolTarget(execution, path);
+ 
+     return html`
+@@ -48,7 +49,9 @@
+ 
+         ${previewMismatch ? html`<p class="notice">Applied diff differs from the preview.</p>` : null}
+         ${errorText === undefined || errorText === "" ? null : html`<pre class="error-text">${errorText}</pre>`}
+-        ${visibleDiff === undefined ? this.renderTextBody(bodyText, execution.status === "error", target) : this.renderDiffBody(visibleDiff, actualDiff === undefined ? "Preview diff" : "Applied diff", target)}
++        ${this.renderTargetBody(target)}
++        ${visibleDiff === undefined ? null : this.renderDiffBody(visibleDiff, actualDiff === undefined ? "Preview diff" : "Applied diff")}
++        ${this.renderResultBody(execution.resultText, execution.status === "error")}
+       </section>
+     `;
+   }
+@@ -69,23 +72,27 @@
+     `;
+   }
+ 
+-  private renderTextBody(text: string | undefined, open: boolean, target: ToolTarget | undefined) {
+-    if ((text === undefined || text === "") && target === undefined) return null;
++  private renderTargetBody(target: ToolTarget | undefined) {
++    if (target === undefined) return null;
+     return html`
+-      <details class="text-body" ?open=${open}>
++      <details class="text-body" ?open=${this.detailsOpen}>
+         <summary>Details</summary>
+         ${this.renderExpandedTarget(target)}
+-        ${text === undefined || text === "" ? null : html`
+-          <div class="detail-result">
+-            <span class="detail-label">Result</span>
+-            <pre>${text}</pre>
+-          </div>
+-        `}
+       </details>
+     `;
+   }
+ 
+-  private renderDiffBody(diff: string, label: string, target: ToolTarget | undefined) {
++  private renderResultBody(text: string | undefined, isError: boolean) {
++    if (text === undefined || text === "") return null;
++    return html`
++      <details class="result-body" ?open=${this.resultOpen || isError}>
++        <summary>Result</summary>
++        <div class="detail-result"><pre>${text}</pre></div>
++      </details>
++    `;
++  }
++
++  private renderDiffBody(diff: string, label: string) {
+     const lines = diff.split("\n");
+     const truncated = !this.showFullDiff && lines.length > MAX_COLLAPSED_DIFF_LINES;
+     const visibleLines = truncated ? lines.slice(0, MAX_COLLAPSED_DIFF_LINES) : lines;
+@@ -95,7 +102,6 @@
+           <span>${label}</span>
+           <small>${String(lines.length)} ${lines.length === 1 ? "line" : "lines"}</small>
+         </summary>
+-        ${this.renderExpandedTarget(target)}
+         <div class="diff-toolbar">
+           <span>${truncated ? `Showing ${String(visibleLines.length)} of ${String(lines.length)} lines` : "Full diff"}</span>
+           <button type="button" @click=${() => { void this.copyDiff(diff); }}>${this.copied ? "Copied" : "Copy diff"}</button>
+@@ -145,10 +151,10 @@
+     .notice { margin: 0; color: var(--pi-warning); }
+     .muted { margin: 0; color: var(--pi-muted); }
+     .error-text { margin: 0; border: 1px solid var(--pi-danger); border-radius: 7px; background: color-mix(in srgb, var(--pi-danger) 10%, var(--pi-bg)); color: var(--pi-danger); padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+-    .text-body { border-top: 1px solid var(--pi-border-muted); padding-top: 6px; }
++    .text-body, .result-body { border-top: 1px solid var(--pi-border-muted); padding-top: 6px; }
+     .detail-target, .detail-result { display: grid; gap: 4px; margin-top: 8px; min-width: 0; }
+     .detail-label { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+-    .text-body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--pi-text); }
++    .text-body pre, .result-body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--pi-text); }
+     .detail-result pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; border: 1px solid var(--pi-border-muted); border-radius: 7px; background: var(--pi-bg); padding: 8px; white-space: pre; overflow-wrap: normal; direction: ltr; text-align: left; unicode-bidi: isolate; }
+     .detail-target-value { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--pi-accent); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
+     .diff-details { min-width: 0; max-width: 100%; border-top: 1px solid var(--pi-border-muted); padding-top: 6px; }
+diff -ruN a/src/config.ts b/src/config.ts
+--- a/src/config.ts	2026-09-18 15:44:39.245101787 +0000
++++ b/src/config.ts	2026-09-18 15:47:25.045961489 +0000
+@@ -1,7 +1,7 @@
+ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+ import { homedir } from "node:os";
+ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+-import type { PiWebConfigValues, PiWebDeprecatedAgentInput } from "./shared/apiTypes.js";
++import type { PiWebConfigValues, PiWebDeprecatedAgentInput, PiWebDisclosureConfig, PiWebDisclosureMode, PiWebGroupDisclosureMode, PiWebUiConfig } from "./shared/apiTypes.js";
+ import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
+ 
+ export type PiWebConfig = PiWebConfigValues;
+@@ -223,6 +223,7 @@
+   delete existing["port"];
+   delete existing["allowedHosts"];
+   delete existing["shortcuts"];
++  delete existing["ui"];
+   delete existing["plugins"];
+   delete existing["pathAccess"];
+   delete existing["uploads"];
+@@ -253,6 +254,7 @@
+     ...(config.port !== undefined ? { port: config.port } : {}),
+     ...(config.allowedHosts !== undefined ? { allowedHosts: config.allowedHosts } : {}),
+     ...(config.shortcuts !== undefined ? { shortcuts: config.shortcuts } : {}),
++    ...(config.ui !== undefined ? { ui: config.ui } : {}),
+     ...(config.plugins !== undefined ? { plugins: config.plugins } : {}),
+     ...(config.pathAccess !== undefined ? { pathAccess: config.pathAccess } : {}),
+     ...(config.uploads !== undefined ? { uploads: config.uploads } : {}),
+@@ -272,6 +274,7 @@
+     ...(value["port"] !== undefined ? { port: parsePort(value["port"], "port", path) } : {}),
+     ...(value["allowedHosts"] !== undefined ? { allowedHosts: parseAllowedHosts(value["allowedHosts"], path) } : {}),
+     ...(value["shortcuts"] !== undefined ? { shortcuts: parseShortcuts(value["shortcuts"], path) } : {}),
++    ...(value["ui"] !== undefined ? { ui: parseUiConfig(value["ui"], path) } : {}),
+     ...(value["plugins"] !== undefined ? { plugins: parsePlugins(value["plugins"], path) } : {}),
+     ...(value["pathAccess"] !== undefined ? { pathAccess: parsePathAccessConfig(value["pathAccess"], path) } : {}),
+     ...(value["uploads"] !== undefined ? { uploads: parseUploadsConfig(value["uploads"], path) } : {}),
+@@ -561,6 +564,43 @@
+   }));
+ }
+ 
++const DISCLOSURE_MODES = ["none", "live", "last", "all"] as const satisfies readonly PiWebDisclosureMode[];
++const DISCLOSURE_KEYS = ["thinking", "skillInvocation", "toolResult", "toolDetails", "toolDiff"] as const satisfies readonly Exclude<keyof PiWebDisclosureConfig, "eventsGroup">[];
++const GROUP_DISCLOSURE_MODES = ["live", "last", "all"] as const satisfies readonly PiWebGroupDisclosureMode[];
++
++function parseUiConfig(value: unknown, path: string): PiWebUiConfig {
++  if (!isRecord(value)) throw new Error(`PI WEB config ui must be an object: ${path}`);
++  for (const key of Object.keys(value)) {
++    if (key !== "disclosure") throw new Error(`PI WEB config ui key is not allowed: ${key}: ${path}`);
++  }
++  const disclosure = value["disclosure"];
++  return {
++    ...(disclosure !== undefined ? { disclosure: parseDisclosureConfig(disclosure, path) } : {}),
++  };
++}
++
++function parseDisclosureConfig(value: unknown, path: string): PiWebDisclosureConfig {
++  if (!isRecord(value)) throw new Error(`PI WEB config ui.disclosure must be an object: ${path}`);
++  const result: PiWebDisclosureConfig = {};
++  for (const [key, mode] of Object.entries(value)) {
++    if (key === "eventsGroup") {
++      if (!GROUP_DISCLOSURE_MODES.includes(mode as typeof GROUP_DISCLOSURE_MODES[number])) {
++        throw new Error(`PI WEB config ui.disclosure.eventsGroup must be one of ${GROUP_DISCLOSURE_MODES.join(", ")}: ${path}`);
++      }
++      result.eventsGroup = mode as PiWebGroupDisclosureMode;
++      continue;
++    }
++    if (!DISCLOSURE_KEYS.includes(key as typeof DISCLOSURE_KEYS[number])) {
++      throw new Error(`PI WEB config ui.disclosure key is not allowed: ${key}: ${path}`);
++    }
++    if (!DISCLOSURE_MODES.includes(mode as typeof DISCLOSURE_MODES[number])) {
++      throw new Error(`PI WEB config ui.disclosure.${key} must be one of ${DISCLOSURE_MODES.join(", ")}: ${path}`);
++    }
++    result[key as typeof DISCLOSURE_KEYS[number]] = mode as PiWebDisclosureMode;
++  }
++  return result;
++}
++
+ function parsePlugins(value: unknown, path: string): NonNullable<PiWebConfigValues["plugins"]> {
+   if (!isRecord(value) || Array.isArray(value)) throw new Error(`PI WEB config plugins must be an object: ${path}`);
+   return Object.fromEntries(Object.entries(value).map(([pluginId, config]) => {
+diff -ruN a/src/server/configRoutes.ts b/src/server/configRoutes.ts
+--- a/src/server/configRoutes.ts	2026-09-18 15:44:39.249101801 +0000
++++ b/src/server/configRoutes.ts	2026-09-18 15:47:25.049961503 +0000
+@@ -1,6 +1,6 @@
+ import type { FastifyInstance } from "fastify";
+ import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
+-import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
++import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues, PiWebDisclosureConfig, PiWebDisclosureMode, PiWebGroupDisclosureMode, PiWebUiConfig } from "../shared/apiTypes.js";
+ import { isPiWebPluginId } from "../shared/pluginIds.js";
+ 
+ export interface PiWebConfigService {
+@@ -127,6 +127,7 @@
+   const port = value["port"];
+   const allowedHosts = value["allowedHosts"];
+   const shortcuts = value["shortcuts"];
++  const ui = value["ui"];
+   const plugins = value["plugins"];
+   const pathAccess = value["pathAccess"];
+   const uploads = value["uploads"];
+@@ -146,6 +147,7 @@
+   }
+   if (allowedHosts !== undefined) config.allowedHosts = parseAllowedHostsRequest(allowedHosts);
+   if (shortcuts !== undefined) config.shortcuts = parseShortcutsRequest(shortcuts);
++  if (ui !== undefined) config.ui = parseUiRequest(ui);
+   if (plugins !== undefined) config.plugins = parsePluginsRequest(plugins);
+   if (pathAccess !== undefined) config.pathAccess = parsePathAccessRequest(pathAccess);
+   if (uploads !== undefined) config.uploads = parseUploadsConfig(uploads, "request");
+@@ -203,6 +205,43 @@
+   }));
+ }
+ 
++const DISCLOSURE_MODES = ["none", "live", "last", "all"] as const satisfies readonly PiWebDisclosureMode[];
++const DISCLOSURE_KEYS = ["thinking", "skillInvocation", "toolResult", "toolDetails", "toolDiff"] as const satisfies readonly Exclude<keyof PiWebDisclosureConfig, "eventsGroup">[];
++const GROUP_DISCLOSURE_MODES = ["live", "last", "all"] as const satisfies readonly PiWebGroupDisclosureMode[];
++
++function parseUiRequest(value: unknown): PiWebUiConfig {
++  if (!isRecord(value)) throw new Error("PI WEB config ui must be an object");
++  for (const key of Object.keys(value)) {
++    if (key !== "disclosure") throw new Error(`PI WEB config ui key is not allowed: ${key}`);
++  }
++  const disclosure = value["disclosure"];
++  return {
++    ...(disclosure !== undefined ? { disclosure: parseDisclosureRequest(disclosure) } : {}),
++  };
++}
++
++function parseDisclosureRequest(value: unknown): PiWebDisclosureConfig {
++  if (!isRecord(value)) throw new Error("PI WEB config ui.disclosure must be an object");
++  const result: PiWebDisclosureConfig = {};
++  for (const [key, mode] of Object.entries(value)) {
++    if (key === "eventsGroup") {
++      if (!GROUP_DISCLOSURE_MODES.includes(mode as typeof GROUP_DISCLOSURE_MODES[number])) {
++        throw new Error(`PI WEB config ui.disclosure.eventsGroup must be one of ${GROUP_DISCLOSURE_MODES.join(", ")}`);
++      }
++      result.eventsGroup = mode as PiWebGroupDisclosureMode;
++      continue;
++    }
++    if (!DISCLOSURE_KEYS.includes(key as typeof DISCLOSURE_KEYS[number])) {
++      throw new Error(`PI WEB config ui.disclosure key is not allowed: ${key}`);
++    }
++    if (!DISCLOSURE_MODES.includes(mode as typeof DISCLOSURE_MODES[number])) {
++      throw new Error(`PI WEB config ui.disclosure.${key} must be one of ${DISCLOSURE_MODES.join(", ")}`);
++    }
++    result[key as typeof DISCLOSURE_KEYS[number]] = mode as PiWebDisclosureMode;
++  }
++  return result;
++}
++
+ function parsePathAccessRequest(value: unknown): NonNullable<PiWebConfig["pathAccess"]> {
+   if (!isRecord(value)) throw new Error("PI WEB config pathAccess must be an object");
+   const allowedPaths = value["allowedPaths"];
+diff -ruN a/src/shared/apiTypes.ts b/src/shared/apiTypes.ts
+--- a/src/shared/apiTypes.ts	2026-09-18 15:44:39.281101913 +0000
++++ b/src/shared/apiTypes.ts	2026-09-18 15:47:25.053961515 +0000
+@@ -120,6 +120,22 @@
+ }
+ 
+ export type PiWebShortcutConfig = Record<string, string | null>;
++export type PiWebDisclosureMode = "none" | "live" | "last" | "all";
++export type PiWebGroupDisclosureMode = "live" | "last" | "all";
++
++export interface PiWebDisclosureConfig {
++  thinking?: PiWebDisclosureMode;
++  skillInvocation?: PiWebDisclosureMode;
++  toolResult?: PiWebDisclosureMode;
++  toolDetails?: PiWebDisclosureMode;
++  toolDiff?: PiWebDisclosureMode;
++  eventsGroup?: PiWebGroupDisclosureMode;
++}
++
++export interface PiWebUiConfig {
++  disclosure?: PiWebDisclosureConfig;
++}
++
+ export type PiWebPluginSettings = Record<string, unknown>;
+ export type PiWebPluginConfigMap = Record<string, PiWebPluginConfig>;
+ 
+@@ -169,6 +185,8 @@
+   port?: number;
+   allowedHosts?: string[] | true;
+   shortcuts?: PiWebShortcutConfig;
++  /** Browser-only UI preferences, local to this gateway and never sent to a selected machine. */
++  ui?: PiWebUiConfig;
+   plugins?: PiWebPluginConfigMap;
+   /** External filesystem roots PI WEB may expose outside a workspace. */
+   pathAccess?: PiWebPathAccessConfig;

@@ -1,0 +1,32 @@
+{
+  "reminders": [
+    {
+      "$ref": "01rem-environment.md"
+    },
+    {
+      "$ref": "02rem-model.md"
+    },
+    {
+      "$ref": "03rem-agents.md"
+    },
+    {
+      "$ref": "04rem-claude-md.md"
+    },
+    {
+      "$ref": "05rem-git-status.md"
+    },
+    {
+      "$ref": "06rem-date.md"
+    },
+    {
+      "$ref": "07rem-attribution.md"
+    }
+  ],
+  "system": [
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    {
+      "$ref": "90sys-claude.md"
+    }
+  ],
+  "systemPlacement": "after_all"
+}

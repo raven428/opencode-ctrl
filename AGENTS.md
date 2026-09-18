@@ -7,6 +7,7 @@
 - `patches/common/` – патчи, применяемые на обе платформы (linux и windows)
 - `patches/linux/` – патчи только для linux-сборки
 - `patches/windows/` – патчи только для windows-сборки
+- `patches/_pi-web/patches/` – патчи апстрима pi-web, применяемые в CI перед публикацией пакета `@raven428/pi-web` в GitHub Packages
 - `scripts/` – bash-скрипты сборки и подготовки окружения
 - `.github/workflows/build.yaml` – CI: клонирует opencode, применяет патчи, собирает артефакты
 
@@ -19,7 +20,7 @@
 
 ## Патчи
 
-Каждый `.diff` в `patches/common/` – это `git diff` относительно оригинального репо opencode. Применяются через `patch -p1`. Порядок применения – алфавитный (по имени файла).
+Каждый `.diff` в `patches/common/` – это `diff` относительно оригинального репо opencode. Применяются через `patch -p1`. Порядок применения – алфавитный (по имени файла).
 
 Текущие патчи в `patches/common/`:
 

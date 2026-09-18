@@ -1,0 +1,95 @@
+diff -ruN a/src/client/src/components/PromptEditor.ts b/src/client/src/components/PromptEditor.ts
+--- a/src/client/src/components/PromptEditor.ts	2026-09-18 12:18:42.958778240 +0000
++++ b/src/client/src/components/PromptEditor.ts	2026-09-18 12:18:42.962778261 +0000
+@@ -14,7 +14,7 @@
+ import { clearDraft, loadDraft, saveDraft } from "../promptDraftStorage";
+ import { clearStagedAttachments, loadStagedAttachments, saveStagedAttachments, type PendingAttachment } from "../promptAttachmentStaging";
+ import { loadAttachmentDelivery, saveAttachmentDelivery } from "../attachmentPreferences";
+-import { createMobilePromptEnterMedia, readPromptEnterPreference, shouldSendPromptOnEnterShortcut, shouldUsePromptEnterShiftShortcut } from "../promptEnterBehavior";
++import { createMobilePromptEnterMedia, readPromptEnterPreference, shouldSendPromptOnEnterChord, shouldUsePromptEnterShiftShortcut } from "../promptEnterBehavior";
+ import { promptEditorStyles, type CompletionItem } from "./shared";
+ import { renderAttachIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+ import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
+@@ -423,7 +423,7 @@
+ 
+     const shiftKey = shouldUsePromptEnterShiftShortcut(event.shiftKey, this.explicitShiftKeyActive, this.mobilePromptEnterMedia);
+     this.explicitShiftKeyActive = false;
+-    return this.handleEditorEnter(view, shiftKey);
++    return this.handleEditorEnter(view, shiftKey, event.ctrlKey || event.metaKey);
+   }
+ 
+   private handleEditorKeyUp(event: KeyboardEvent): boolean {
+@@ -436,13 +436,13 @@
+     return false;
+   }
+ 
+-  private handleEditorEnter(view: EditorView, shiftKey: boolean): boolean {
++  private handleEditorEnter(view: EditorView, shiftKey: boolean, modKey: boolean): boolean {
+     if (!shiftKey && this.completions.length) {
+       const completion = this.completions[this.selectedIndex];
+       if (completion !== undefined) this.pick(completion);
+       return true;
+     }
+-    if (!shouldSendPromptOnEnterShortcut(shiftKey, this.mobilePromptEnterMedia, readPromptEnterPreference())) {
++    if (!shouldSendPromptOnEnterChord(modKey, shiftKey, this.mobilePromptEnterMedia, readPromptEnterPreference())) {
+       return insertNewlineContinueMarkup(view) || insertNewlineAndIndent(view);
+     }
+     this.send(this.canSteer || this.isCompacting ? "followUp" : undefined);
+diff -ruN a/src/client/src/components/settings/SettingsShortcutsPanel.ts b/src/client/src/components/settings/SettingsShortcutsPanel.ts
+--- a/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:18:42.962778261 +0000
++++ b/src/client/src/components/settings/SettingsShortcutsPanel.ts	2026-09-18 12:18:42.966778283 +0000
+@@ -25,6 +25,11 @@
+     label: "Enter inserts new line",
+     description: "Enter adds a line break; Shift+Enter sends the chat message when supported.",
+   },
++  {
++    value: "modifier",
++    label: "Ctrl+Enter sends message",
++    description: "Enter and Shift+Enter always insert a line break; Ctrl+Enter (⌘+Enter on macOS) sends the chat message.",
++  },
+ ];
+ 
+ function renderShortcutsDescription(): TemplateResult {
+@@ -135,7 +140,7 @@
+         <div class="prompt-enter-copy">
+           <span class="card-eyebrow">Chat composer</span>
+           <h3 id="prompt-enter-preference-title">Enter key behavior</h3>
+-          <p>Choose what Enter does in this browser. Shift+Enter does the opposite when supported; automatic touch-keyboard capitalization is ignored to avoid accidental sends.</p>
++          <p>Choose what Enter does in this browser. Shift+Enter does the opposite when supported, except in Ctrl+Enter mode where it always inserts a line break; automatic touch-keyboard capitalization is ignored to avoid accidental sends.</p>
+         </div>
+         <div class="prompt-enter-options" role="radiogroup" aria-label="Enter and Shift Enter behavior in the chat composer">
+           ${PROMPT_ENTER_OPTIONS.map((option) => html`
+diff -ruN a/src/client/src/promptEnterBehavior.ts b/src/client/src/promptEnterBehavior.ts
+--- a/src/client/src/promptEnterBehavior.ts	2026-09-18 12:18:42.958778240 +0000
++++ b/src/client/src/promptEnterBehavior.ts	2026-09-18 12:18:42.962778261 +0000
+@@ -1,7 +1,7 @@
+ export const MOBILE_PROMPT_ENTER_MEDIA_QUERY = "(pointer: coarse), (max-width: 760px)";
+ export const PROMPT_ENTER_PREFERENCE_STORAGE_KEY = "pi-web.promptEnterPreference";
+ 
+-export type PromptEnterPreference = "auto" | "send" | "newline";
++export type PromptEnterPreference = "auto" | "send" | "newline" | "modifier";
+ export type PromptEnterMedia = Pick<MediaQueryList, "matches">;
+ export type PromptEnterPreferenceStorage = Pick<Storage, "getItem" | "setItem">;
+ 
+@@ -10,7 +10,7 @@
+ }
+ 
+ export function parsePromptEnterPreference(value: string | null): PromptEnterPreference {
+-  if (value === "send" || value === "newline") return value;
++  if (value === "send" || value === "newline" || value === "modifier") return value;
+   return "auto";
+ }
+ 
+@@ -51,6 +51,12 @@
+   return shiftKey ? !plainEnterSends : plainEnterSends;
+ }
+ 
++/** Like `shouldSendPromptOnEnterShortcut`, but in "modifier" mode only Ctrl/Cmd+Enter sends: plain Enter and Shift+Enter always insert a newline. */
++export function shouldSendPromptOnEnterChord(modKey: boolean, shiftKey: boolean, media = createMobilePromptEnterMedia(), preference = readPromptEnterPreference()): boolean {
++  if (preference === "modifier") return modKey;
++  return shouldSendPromptOnEnterShortcut(shiftKey, media, preference);
++}
++
+ function browserStorage(): PromptEnterPreferenceStorage | undefined {
+   if (typeof window === "undefined") return undefined;
+   try {

@@ -1,0 +1,20 @@
+{
+  "reminders": [
+    {
+      "$ref": "01rem-agents.md"
+    },
+    {
+      "$ref": "02rem-skills.md"
+    },
+    {
+      "$ref": "03rem-claude-md.md"
+    }
+  ],
+  "system": [
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    {
+      "$ref": "90sys-claude.md"
+    }
+  ],
+  "systemPlacement": "after_all"
+}
