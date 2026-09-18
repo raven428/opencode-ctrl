@@ -19,6 +19,9 @@ env:
     ~/.cache/electron-builder
     /tmp/opencode/packages/desktop
   OPENCODE_VERSION: v1.15.13
+  PI_WEB_REPO: /tmp/pi-web
+  PI_WEB_VERSION: v1.202609.0
+  PI_WEB_PATCHSET: p0
 jobs:
   cache-cargo-bun:
     name: warm dependencies cache
@@ -100,12 +103,71 @@ jobs:
             ${{ github.ref_type == 'tag'
               && format('opencode build {0}', github.ref_name)
               || format('branch [{0}] opencode build from recent commit', github.head_ref == '' && github.ref_name || github.head_ref) }}
+  pi-web:
+    name: publish pi-web package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: clone and patch
+        run: |
+          git clone --depth 1 --branch "${PI_WEB_VERSION}" \
+            https://github.com/jmfederico/pi-web.git "${PI_WEB_REPO}"
+          bash scripts/patch.sh "${PI_WEB_REPO}" patches/_pi-web/patches
+      # no cache: npm here, the lockfile lives outside the checkout in PI_WEB_REPO
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: "@raven428"
+      - name: compute version and dist-tag
+        id: version
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          base="${PI_WEB_VERSION#v}"
+          # pi-web has no tags of its own here, releases go out from master
+          if [[ "${{ github.ref }}" == 'refs/heads/master' ]]; then
+            echo "version=${base}${PI_WEB_PATCHSET}" >> "${GITHUB_OUTPUT}"
+            echo "dist_tag=latest" >> "${GITHUB_OUTPUT}"
+          else
+            echo "version=${base}-dev.${RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+            echo "dist_tag=dev" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: set package metadata
+        working-directory: ${{ env.PI_WEB_REPO }}
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npm pkg set name='@raven428/pi-web'
+          npm pkg set version="${PKG_VERSION}"
+          npm pkg set repository.type='git'
+          npm pkg set repository.url='git+https://github.com/raven428/opencode-ctrl.git'
+          npm pkg set publishConfig.registry='https://npm.pkg.github.com'
+          # prepublishOnly runs upstream verify (typecheck/lint/knip/test), skip it
+          npm pkg delete scripts.prepublishOnly
+      - name: install dependencies
+        working-directory: ${{ env.PI_WEB_REPO }}
+        run: npm ci
+      - name: publish package
+        working-directory: ${{ env.PI_WEB_REPO }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
+        run: npm publish --tag "${DIST_TAG}"
   all-green:
     name: all green
     timeout-minutes: 3
     runs-on: ubuntu-latest
     needs:
       - build
+      - pi-web
     if: github.event_name == 'pull_request'
     permissions:
       checks: read
