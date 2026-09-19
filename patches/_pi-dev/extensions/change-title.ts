@@ -25,7 +25,16 @@ const ChangeTitleParams = Type.Object(
   { additionalProperties: true },
 );
 
+function hasCommandLineFlag(name: string) {
+  const flag = `--${name}`;
+  return process.argv.slice(2).some(
+    (argument) => argument === flag || argument.startsWith(`${flag}=`),
+  );
+}
+
 export default function changeTitle(pi: ExtensionAPI) {
+  if (hasCommandLineFlag('happy-tools-config')) return;
+
   pi.registerTool({
     name: 'change_title',
     label: 'Change Chat Title',
