@@ -358,7 +358,9 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
           system: system.map((text, index) => ({
             type: 'text',
             text,
-            ...(index === 0 ? {} : { cache_control: { type: 'ephemeral' } }),
+            ...(index > 0 && index < prompt.system.length
+              ? { cache_control: { type: 'ephemeral' } }
+              : {}),
           })),
         }
       : {
