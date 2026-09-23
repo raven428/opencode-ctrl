@@ -42,6 +42,7 @@ type EnvironmentSnapshot = {
 type PromptValues = EnvironmentSnapshot & {
   crs_model_short: string;
   crs_model_full: string;
+  crs_model_name: string;
 };
 
 type ProviderMessage = {
@@ -335,6 +336,7 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
       ...snapshot,
       crs_model_short: model?.id ?? 'unknown',
       crs_model_full: `${model ? ctx.modelRegistry.getProviderDisplayName(model.provider) : 'unknown'}/${model?.id ?? 'unknown'}`,
+      crs_model_name: model?.name ?? 'unknown',
     };
     const reminders = prompt.reminders.map((text) => resolvePlaceholders(text, values));
     const { tools, messages = [], ...payload } = event.payload;
