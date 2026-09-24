@@ -1,28 +1,64 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-
-const CLAUDE_CODE_VERSION = '2.1.269';
+const CLAUDE_CODE_VERSION = '2.1.281';
 const CLAUDE_CODE_STAINLESS_VERSION = '0.112.1';
+const CLAUDE_CODE_RUNTIME_VERSION = 'v26.3.0';
 const VERSION_HASH_SALT = '59cf53e54c78';
 const VERSION_HASH_CHARACTER_INDEXES = [4, 7, 20] as const;
-const CCH_SEED = 0x6e52736ac806831en;
-const CCH_MASK = 0xfffffn;
-const CCH_PLACEHOLDER = '00000';
-const UINT64_MASK = 0xffffffffffffffffn;
-const PRIME64_1 = 0x9e3779b185ebca87n;
-const PRIME64_2 = 0xc2b2ae3d27d4eb4fn;
-const PRIME64_3 = 0x165667b19e3779f9n;
-const PRIME64_4 = 0x85ebca77c2b2ae63n;
-const PRIME64_5 = 0x27d4eb2f165667c5n;
 const BILLING_PREFIX = 'x-anthropic-billing-header:';
-
+const BASE_BETAS = [
+  'claude-code-20250219',
+  'oauth-2025-04-20',
+  'interleaved-thinking-2025-05-14',
+  'redact-thinking-2026-02-12',
+  'thinking-token-count-2026-05-13',
+  'context-management-2025-06-27',
+  'prompt-caching-scope-2026-01-05',
+];
+const COMMON_BETAS = [...BASE_BETAS, 'mid-conversation-system-2026-04-07'];
+const SONNET_BETAS = [
+  ...COMMON_BETAS,
+  'effort-2025-11-24',
+  'extended-cache-ttl-2025-04-11',
+];
+const OPUS_5_5_BETAS = [
+  ...COMMON_BETAS,
+  'per-turn-control-2026-07-01',
+  'mid-conversation-tool-changes-2026-07-01',
+  'effort-2025-11-24',
+  'fallback-credit-2026-06-01',
+  'extended-cache-ttl-2025-04-11',
+];
+const OPUS_5_BETAS = [
+  ...COMMON_BETAS,
+  'mid-conversation-tool-changes-2026-07-01',
+  'effort-2025-11-24',
+  'fallback-credit-2026-06-01',
+  'extended-cache-ttl-2025-04-11',
+];
+const OPUS_4_8_BETAS = [
+  ...COMMON_BETAS,
+  'mid-conversation-tool-changes-2026-07-01',
+  'effort-2025-11-24',
+  'extended-cache-ttl-2025-04-11',
+];
+const OPUS_4_7_BETAS = [
+  ...BASE_BETAS,
+  'effort-2025-11-24',
+  'extended-cache-ttl-2025-04-11',
+];
+const BETAS_BY_MODEL: Record<string, string[]> = {
+  'claude-sonnet-5': SONNET_BETAS,
+  'claude-opus-5-5': OPUS_5_5_BETAS,
+  'claude-opus-5': OPUS_5_BETAS,
+  'claude-opus-4-8': OPUS_4_8_BETAS,
+  'claude-opus-4-7': OPUS_4_7_BETAS,
+};
 export type ProviderPayload = Record<string, unknown>;
 export type ProviderSystemBlock = Record<string, unknown>;
-
 function isProviderPayload(payload: unknown): payload is ProviderPayload {
   return typeof payload === 'object' && payload !== null && !Array.isArray(payload);
 }
-
 function isSystemTextBlock(block: unknown): block is ProviderSystemBlock & { text: string } {
   return (
     typeof block === 'object' &&
@@ -32,7 +68,6 @@ function isSystemTextBlock(block: unknown): block is ProviderSystemBlock & { tex
     typeof (block as ProviderSystemBlock).text === 'string'
   );
 }
-
 function isAnthropicOAuth(ctx: ExtensionContext): boolean {
   return (
     ctx.model !== undefined &&
@@ -40,95 +75,6 @@ function isAnthropicOAuth(ctx: ExtensionContext): boolean {
     ctx.modelRegistry.isUsingOAuth(ctx.model)
   );
 }
-
-export function rotateLeft64(value: bigint, bits: bigint): bigint {
-  return ((value << bits) | (value >> (64n - bits))) & UINT64_MASK;
-}
-
-export function readUint64LE(bytes: Uint8Array, offset: number): bigint {
-  let value = 0n;
-  for (let index = 0; index < 8; index += 1) {
-    value |= BigInt(bytes[offset + index]) << BigInt(index * 8);
-  }
-  return value;
-}
-
-export function readUint32LE(bytes: Uint8Array, offset: number): bigint {
-  let value = 0n;
-  for (let index = 0; index < 4; index += 1) {
-    value |= BigInt(bytes[offset + index]) << BigInt(index * 8);
-  }
-  return value;
-}
-
-function round(accumulator: bigint, input: bigint): bigint {
-  const mixed = (accumulator + input * PRIME64_2) & UINT64_MASK;
-  return (rotateLeft64(mixed, 31n) * PRIME64_1) & UINT64_MASK;
-}
-
-function mergeRound(accumulator: bigint, value: bigint): bigint {
-  const mixed = accumulator ^ round(0n, value);
-  return (mixed * PRIME64_1 + PRIME64_4) & UINT64_MASK;
-}
-
-export function xxhash64(bytes: Uint8Array, seed: bigint): bigint {
-  let offset = 0;
-  let hash: bigint;
-  if (bytes.length >= 32) {
-    let lane1 = (seed + PRIME64_1 + PRIME64_2) & UINT64_MASK;
-    let lane2 = (seed + PRIME64_2) & UINT64_MASK;
-    let lane3 = seed & UINT64_MASK;
-    let lane4 = (seed - PRIME64_1) & UINT64_MASK;
-    const limit = bytes.length - 32;
-    while (offset <= limit) {
-      lane1 = round(lane1, readUint64LE(bytes, offset));
-      lane2 = round(lane2, readUint64LE(bytes, offset + 8));
-      lane3 = round(lane3, readUint64LE(bytes, offset + 16));
-      lane4 = round(lane4, readUint64LE(bytes, offset + 24));
-      offset += 32;
-    }
-    hash = (
-      rotateLeft64(lane1, 1n) +
-      rotateLeft64(lane2, 7n) +
-      rotateLeft64(lane3, 12n) +
-      rotateLeft64(lane4, 18n)
-    ) & UINT64_MASK;
-    hash = mergeRound(hash, lane1);
-    hash = mergeRound(hash, lane2);
-    hash = mergeRound(hash, lane3);
-    hash = mergeRound(hash, lane4);
-  } else {
-    hash = (seed + PRIME64_5) & UINT64_MASK;
-  }
-  hash = (hash + BigInt(bytes.length)) & UINT64_MASK;
-  while (offset + 8 <= bytes.length) {
-    const lane = round(0n, readUint64LE(bytes, offset));
-    hash ^= lane;
-    hash = (rotateLeft64(hash, 27n) * PRIME64_1 + PRIME64_4) & UINT64_MASK;
-    offset += 8;
-  }
-  if (offset + 4 <= bytes.length) {
-    hash ^= (readUint32LE(bytes, offset) * PRIME64_1) & UINT64_MASK;
-    hash = (rotateLeft64(hash, 23n) * PRIME64_2 + PRIME64_3) & UINT64_MASK;
-    offset += 4;
-  }
-  while (offset < bytes.length) {
-    hash ^= (BigInt(bytes[offset]) * PRIME64_5) & UINT64_MASK;
-    hash = (rotateLeft64(hash, 11n) * PRIME64_1) & UINT64_MASK;
-    offset += 1;
-  }
-  hash ^= hash >> 33n;
-  hash = (hash * PRIME64_2) & UINT64_MASK;
-  hash ^= hash >> 29n;
-  hash = (hash * PRIME64_3) & UINT64_MASK;
-  return (hash ^ (hash >> 32n)) & UINT64_MASK;
-}
-
-export function computeCCH(bodyString: string): string {
-  const hash = xxhash64(new TextEncoder().encode(bodyString), CCH_SEED);
-  return (hash & CCH_MASK).toString(16).padStart(5, '0');
-}
-
 export function buildHashFor(version: string, firstUserPrompt: string): string {
   const characters = VERSION_HASH_CHARACTER_INDEXES
     .map((index) => firstUserPrompt[index] ?? '0')
@@ -138,7 +84,6 @@ export function buildHashFor(version: string, firstUserPrompt: string): string {
     .digest('hex')
     .slice(0, 3);
 }
-
 function firstUserPrompt(payload: ProviderPayload): string {
   if (!Array.isArray(payload.messages)) return '';
   for (const message of payload.messages) {
@@ -157,31 +102,6 @@ function firstUserPrompt(payload: ProviderPayload): string {
   }
   return '';
 }
-
-export function normalizeAnthropicBodyForSigning(payload: ProviderPayload): ProviderPayload {
-  const { output_format: outputFormat, output_config: outputConfig, ...body } = payload;
-  if (!outputFormat) return payload;
-  if (isProviderPayload(outputConfig) && outputConfig.format) {
-    throw new Error('Cannot specify both output_format and output_config.format.');
-  }
-  return {
-    ...body,
-    output_config: {
-      ...(isProviderPayload(outputConfig) ? outputConfig : {}),
-      format: outputFormat,
-    },
-  };
-}
-
-function buildSigningBody(payload: ProviderPayload): ProviderPayload {
-  const normalized = normalizeAnthropicBodyForSigning(payload);
-  const { betas, user_profile_id, workspace_id, ...body } = normalized;
-  void betas;
-  void user_profile_id;
-  void workspace_id;
-  return body;
-}
-
 function systemWithoutBilling(system: unknown): unknown[] {
   const blocks = typeof system === 'string'
     ? [{ type: 'text', text: system }]
@@ -192,7 +112,6 @@ function systemWithoutBilling(system: unknown): unknown[] {
     (block) => !isSystemTextBlock(block) || !block.text.startsWith(BILLING_PREFIX),
   );
 }
-
 function stainlessOS(): string {
   switch (process.platform) {
     case 'darwin':
@@ -207,7 +126,6 @@ function stainlessOS(): string {
       return 'Unknown';
   }
 }
-
 function stainlessArch(): string {
   switch (process.arch) {
     case 'x64':
@@ -220,20 +138,20 @@ function stainlessArch(): string {
       return process.arch;
   }
 }
-
 function setHeader(headers: Record<string, string | null>, name: string, value: string): void {
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
   }
   headers[name] = value;
 }
-
 export default function anthropicOAuthFingerprint(pi: ExtensionAPI) {
   const sessionId = randomUUID();
-
   pi.on('before_provider_headers', (event, ctx) => {
     if (!isAnthropicOAuth(ctx)) return;
     const headers = event.headers as Record<string, string | null>;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'x-client-request-id') delete headers[key];
+    }
     setHeader(headers, 'Accept', 'application/json');
     setHeader(headers, 'anthropic-version', '2023-06-01');
     setHeader(headers, 'anthropic-dangerous-direct-browser-access', 'true');
@@ -245,31 +163,25 @@ export default function anthropicOAuthFingerprint(pi: ExtensionAPI) {
     setHeader(headers, 'X-Stainless-Lang', 'js');
     setHeader(headers, 'X-Stainless-OS', stainlessOS());
     setHeader(headers, 'X-Stainless-Runtime', 'node');
-    setHeader(headers, 'X-Stainless-Runtime-Version', process.version);
+    setHeader(headers, 'X-Stainless-Runtime-Version', CLAUDE_CODE_RUNTIME_VERSION);
     setHeader(headers, 'X-Stainless-Retry-Count', '0');
-    setHeader(headers, 'x-client-request-id', randomUUID());
     setHeader(headers, 'X-Claude-Code-Session-Id', sessionId);
   });
-
-  // This handler must load after every payload rewriter so CCH signs final bytes.
   pi.on('before_provider_request', (event, ctx) => {
     if (!isAnthropicOAuth(ctx) || !isProviderPayload(event.payload)) return;
     const prompt = firstUserPrompt(event.payload);
-    const promptId = randomUUID();
-    const billing = (
-      `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.` +
-      `${buildHashFor(CLAUDE_CODE_VERSION, prompt)}; cc_entrypoint=cli; ` +
-      `cch=${CCH_PLACEHOLDER}; cc_prompt_id=${promptId};`
-    );
     const billingBlock: ProviderSystemBlock & { text: string } = {
       type: 'text',
-      text: billing,
+      text: (
+        `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.` +
+        `${buildHashFor(CLAUDE_CODE_VERSION, prompt)}; cc_entrypoint=cli;`
+      ),
     };
-    const system: unknown[] = [billingBlock, ...systemWithoutBilling(event.payload.system)];
-    const payload = { ...event.payload, system };
-    // SDK moves these fields into headers before serializing the body for transport.
-    const cch = computeCCH(JSON.stringify(buildSigningBody(payload)));
-    billingBlock.text = billing.replace(`cch=${CCH_PLACEHOLDER};`, `cch=${cch};`);
-    return payload;
+    const betas = BETAS_BY_MODEL[ctx.model?.id ?? ''] ?? event.payload.betas;
+    return {
+      ...event.payload,
+      ...(betas === undefined ? {} : { betas }),
+      system: [billingBlock, ...systemWithoutBilling(event.payload.system)],
+    };
   });
 }

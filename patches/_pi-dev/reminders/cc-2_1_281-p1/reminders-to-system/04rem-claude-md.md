@@ -4,4 +4,8 @@ Codebase and user instructions are shown below. Be sure to adhere to these instr
 Contents of {{crs_global_instructions_path}} (user's private global instructions for all projects):
 
 {{crs_global_instructions}}
+
+Contents of {{crs_cwd}}/AGENTS.md (project instructions, checked into the codebase):
+
+{{crs_local_instructions}}
 </system-reminder>

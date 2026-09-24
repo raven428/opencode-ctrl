@@ -8,16 +8,21 @@ type PromptFileReference = { $ref: string };
 type PromptValue = string | PromptFileReference;
 type SystemPlacement = 'after_all' | 'after_reminders' | 'before_reminders';
 
-type PromptConfigSource = {
+type PromptVariantSource = {
   reminders: PromptValue[];
   system: PromptValue[];
-  systemPlacement?: SystemPlacement;
 };
-
-type PromptConfig = {
+type PromptConfigSource = PromptVariantSource & {
+  systemPlacement?: SystemPlacement;
+  models?: Record<string, Partial<PromptVariantSource>>;
+};
+type PromptVariant = {
   reminders: string[];
   system: string[];
+};
+type PromptConfig = PromptVariant & {
   systemPlacement: SystemPlacement;
+  models: Record<string, PromptVariant>;
 };
 
 type EnvironmentSnapshot = {
@@ -133,17 +138,40 @@ function loadPromptConfig(): PromptConfig {
   ) {
     throw new Error(`Invalid systemPlacement: ${String(config.systemPlacement)}.`);
   }
+  const loadVariant = (variant: PromptVariantSource): PromptVariant => {
+    if (!Array.isArray(variant.reminders) || !Array.isArray(variant.system)) {
+      throw new Error('Invalid Omni Claude Code prompt variant.');
+    }
+    return {
+      reminders: variant.reminders.map((value, index) => (
+        loadPromptEntry(value, 'reminders', index, configDir)
+      )),
+      system: variant.system.map((value, index) => (
+        loadPromptEntry(value, 'system', index, configDir)
+      )),
+    };
+  };
   return {
-    reminders: config.reminders.map((value, index) => loadPromptEntry(value, 'reminders', index, configDir)),
-    system: config.system.map((value, index) => loadPromptEntry(value, 'system', index, configDir)),
+    ...loadVariant(config),
     systemPlacement,
+    models: Object.fromEntries(
+      Object.entries(config.models ?? {}).map(([id, variant]) => [
+        id,
+        loadVariant({
+          reminders: variant.reminders ?? config.reminders,
+          system: variant.system ?? config.system,
+        }),
+      ]),
+    ),
   };
 }
 
 function usedPlaceholders(prompt: PromptConfig) {
   const placeholders = new Set<string>();
-  for (const text of [...prompt.reminders, ...prompt.system]) {
-    for (const match of text.matchAll(placeholderPattern)) placeholders.add(match[1].toLowerCase());
+  for (const variant of [prompt, ...Object.values(prompt.models)]) {
+    for (const text of [...variant.reminders, ...variant.system]) {
+      for (const match of text.matchAll(placeholderPattern)) placeholders.add(match[1].toLowerCase());
+    }
   }
   return placeholders;
 }
@@ -338,10 +366,11 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
       crs_model_full: `${model ? ctx.modelRegistry.getProviderDisplayName(model.provider) : 'unknown'}/${model?.id ?? 'unknown'}`,
       crs_model_name: model?.name ?? 'unknown',
     };
-    const reminders = prompt.reminders.map((text) => resolvePlaceholders(text, values));
+    const variant = model ? prompt.models[model.id] ?? prompt : prompt;
+    const reminders = variant.reminders.map((text) => resolvePlaceholders(text, values));
     const { tools, messages = [], ...payload } = event.payload;
     const system = [
-      ...prompt.system.map((text) => resolvePlaceholders(text, values)),
+      ...variant.system.map((text) => resolvePlaceholders(text, values)),
       ...appendedSystemPrompts,
     ];
     const filteredMessages = messages.filter((message) => message.role !== 'developer');
@@ -358,7 +387,7 @@ export default function prependClaudeCodePrompt(pi: ExtensionAPI) {
           system: system.map((text, index) => ({
             type: 'text',
             text,
-            ...(index > 0 && index < prompt.system.length
+            ...(index > 0 && index < variant.system.length
               ? { cache_control: { type: 'ephemeral' } }
               : {}),
           })),

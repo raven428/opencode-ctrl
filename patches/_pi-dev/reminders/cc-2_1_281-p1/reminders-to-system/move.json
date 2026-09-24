@@ -31,5 +31,90 @@
       "$ref": "91sys-text-output.md"
     }
   ],
+  "models": {
+    "claude-opus-5-5": {
+      "reminders": [
+        "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {{crs_cwd}}\n - Is a git repository: {{crs_is_repo}}\n - Platform: {{crs_platform}}\n - Shell: {{crs_shell}}\n - OS Version: {{crs_os_ver}}",
+        "You are powered by the model named {{crs_model_name}}. The exact model ID is {{crs_model_short}}. Assistant knowledge cutoff is June 2026.",
+        {
+          "$ref": "03rem-agents-opus.md"
+        },
+        {
+          "$ref": "04rem-claude-md.md"
+        },
+        {
+          "$ref": "05rem-git-status.md"
+        },
+        "Today's date is {{crs_today}}.",
+        {
+          "$ref": "07rem-attribution.md"
+        }
+      ],
+      "system": [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        {
+          "$ref": "90sys-opus.md"
+        }
+      ]
+    },
+    "claude-opus-5": {
+      "reminders": [
+        "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {{crs_cwd}}\n - Is a git repository: {{crs_is_repo}}\n - Platform: {{crs_platform}}\n - Shell: {{crs_shell}}\n - OS Version: {{crs_os_ver}}",
+        "You are powered by the model named {{crs_model_name}}. The exact model ID is {{crs_model_short}}. Assistant knowledge cutoff is May 2026.",
+        {
+          "$ref": "03rem-agents-opus.md"
+        },
+        {
+          "$ref": "04rem-claude-md.md"
+        },
+        {
+          "$ref": "05rem-git-status.md"
+        },
+        "Today's date is {{crs_today}}.",
+        {
+          "$ref": "07rem-attribution.md"
+        }
+      ],
+      "system": [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        {
+          "$ref": "90sys-opus-5.md"
+        }
+      ]
+    },
+    "claude-opus-4-8": {
+      "reminders": [
+        "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {{crs_cwd}}\n - Is a git repository: {{crs_is_repo}}\n - Platform: {{crs_platform}}\n - Shell: {{crs_shell}}\n - OS Version: {{crs_os_ver}}",
+        "You are powered by the model named {{crs_model_name}}. The exact model ID is {{crs_model_short}}. Assistant knowledge cutoff is January 2026.",
+        {
+          "$ref": "03rem-agents-opus.md"
+        },
+        {
+          "$ref": "04rem-claude-md.md"
+        },
+        {
+          "$ref": "05rem-git-status.md"
+        },
+        "Today's date is {{crs_today}}.",
+        {
+          "$ref": "07rem-attribution.md"
+        }
+      ],
+      "system": [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        {
+          "$ref": "90sys-opus-4_8.md"
+        }
+      ]
+    },
+    "claude-opus-4-7": {
+      "system": [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        {
+          "$ref": "90sys-opus-4_7.md"
+        }
+      ]
+    }
+  },
   "systemPlacement": "after_all"
 }
