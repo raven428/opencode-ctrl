@@ -94,6 +94,12 @@ function firstUserPrompt(payload: ProviderPayload): string {
       continue;
     }
     if (!Array.isArray(content)) continue;
+    if (
+      message === payload.messages[0] &&
+      content.length > 1 &&
+      isSystemTextBlock(content[0]) &&
+      /^(?:<system-reminder>\n)?# Environment\nYou have been invoked /u.test(content[0].text)
+    ) continue;
     for (const block of content) {
       if (!isSystemTextBlock(block)) continue;
       if (block.text.startsWith('<system-reminder>')) continue;
@@ -178,9 +184,28 @@ export default function anthropicOAuthFingerprint(pi: ExtensionAPI) {
       ),
     };
     const betas = BETAS_BY_MODEL[ctx.model?.id ?? ''] ?? event.payload.betas;
+    const isOpus5 = ['claude-opus-5', 'claude-opus-5-5'].includes(ctx.model?.id ?? '');
+    const thinking = event.payload.thinking;
+    const normalizedThinking = isOpus5 && isProviderPayload(thinking) &&
+      thinking.type === 'adaptive'
+      ? { type: 'adaptive' }
+      : thinking;
+    const messages = isOpus5 && Array.isArray(event.payload.messages)
+      ? event.payload.messages
+        .filter((message) => !isProviderPayload(message) || message.role !== 'system' ||
+          !Array.isArray(message.content) || message.content.length > 0)
+        .map((message) => {
+          if (!isProviderPayload(message) || message.role !== 'system') return message;
+          const { output_config: outputConfig, ...systemMessage } = message;
+          void outputConfig;
+          return systemMessage;
+        })
+      : event.payload.messages;
     return {
       ...event.payload,
       ...(betas === undefined ? {} : { betas }),
+      ...(normalizedThinking === undefined ? {} : { thinking: normalizedThinking }),
+      ...(messages === undefined ? {} : { messages }),
       system: [billingBlock, ...systemWithoutBilling(event.payload.system)],
     };
   });
